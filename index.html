@@ -1383,11 +1383,11 @@
     .device-card { padding: 14px 16px; }
     .device-metrics {
       display: grid;
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
       gap: 10px 14px;
       margin-top: 12px;
     }
-    .device-metric { display: flex; flex-direction: column; gap: 4px; }
+    .device-metric { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
     .dm-label {
       font-size: 10px;
       letter-spacing: .08em;
@@ -1405,6 +1405,23 @@
       font-size: 10px;
       color: var(--text-muted);
       font-family: var(--font-mono);
+      /* Keep "10.1/16 GB · 4.8 GB cached" on one line; clip the cached segment on narrow phones
+         rather than wrapping and shoving the bar out of alignment. */
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      min-width: 0;
+    }
+    .dm-detail {
+      margin-top: 10px;
+      padding-top: 8px;
+      border-top: 1px solid rgba(148, 163, 184, 0.1);
+      font-size: 10px;
+      font-family: var(--font-mono);
+      color: var(--text-muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
     .dm-bar {
       display: block;
@@ -1716,7 +1733,7 @@
 
     <!-- Footer -->
     <footer class="footer">
-      <div>ENDPOINT: GET /status/api/status &bull; INTERVAL: 30s</div>
+      <div>ENDPOINT: GET <span id="brand-endpoint">/api/status</span> &bull; INTERVAL: <span id="brand-interval">30s</span></div>
       <div class="pwa-badge">
         <span id="pwa-mode-indicator">PWA READY</span>
       </div>
@@ -1734,6 +1751,8 @@
         if (el) el.textContent = window.location.origin + (API_BASE || '/');
         const portEl = document.getElementById('brand-port');
         if (portEl) portEl.textContent = 'PORT ' + (window.location.port || (window.location.protocol === 'https:' ? '443' : '80'));
+        const epEl = document.getElementById('brand-endpoint');
+        if (epEl) epEl.textContent = (API_BASE || '') + '/api/status';
       })();
       const API_ENDPOINT = API_BASE + '/api/status';
       const POLL_ENDPOINT = API_BASE + '/api/poll';
@@ -2075,7 +2094,7 @@
                   <span class="dm-label">RAM</span>
                   <span class="dm-value">${ramTxt(d.mem_pct)}</span>
                   <span class="dm-bar"><span class="${barClass(d.mem_pct)}" style="width:${clamp(d.mem_pct)}%"></span></span>
-                  ${d.mem_used ? `<span class="dm-sub">${escapeHtml(d.mem_used)}${d.mem_cached ? ' · ' + escapeHtml(d.mem_cached) : ''}</span>` : ''}
+                  ${d.mem_used ? `<span class="dm-sub">${escapeHtml(d.mem_used)}</span>` : ''}
                 </div>
                 <div class="device-metric">
                   <span class="dm-label">TEMP</span>
@@ -2086,7 +2105,13 @@
                   <span class="dm-value">${uptimeTxt(d.uptime_h)}</span>
                 </div>
               </div>
-            </article>`;
+            
+              ${(d.mem_cached || d.swap_used) ? `<div class="dm-detail">${
+                [d.mem_cached, d.mem_compressed ? escapeHtml(d.mem_compressed) + ' compressed' : '',
+                 d.swap_used ? escapeHtml(d.swap_used) + ' swap' : '']
+                  .filter(Boolean).map(escapeHtml).join(' · ')
+              }</div>` : ''}
+              </article>`;
         }).join('');
 
         return `

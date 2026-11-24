@@ -57,14 +57,18 @@ def memory() -> dict:
         "mem_used": round(_gb(vm.used), 1),
         "mem_total": round(_gb(vm.total), 2),
         "mem_pct": vm.percent,
-        "swap_used": round(_mb(swap.used), 0) if swap.total else None,
-        "mem_cached": round(_gb(getattr(vm, "cached", 0)), 1) if getattr(vm, "cached", 0) else None,
+        "swap_used": f"{_mb(swap.used):.0f} MB" if swap.total else None,
+        "mem_cached": f'{_gb(getattr(vm, "cached", 0)):.1f} GB cached' if getattr(vm, "cached", 0) else None,
         "mem_compressed": None,
     }
-    if out["mem_used"] is not None and out["mem_total"]:
-        out["mem_used_str"] = f"{out['mem_used']:.1f}/{out['mem_total']:.0f} GB"
+    # The renderer expects `mem_used` as a display string ("9.6/16 GB"); the raw numbers ride
+    # alongside as mem_used_gb/mem_total_gb so nothing has to parse the string back.
+    if out["mem_total"]:
+        out["mem_used_gb"] = out["mem_used"]
+        out["mem_used"] = f"{out['mem_used']:.1f}/{out['mem_total']:.0f} GB"
     else:
-        out["mem_used_str"] = ""
+        out["mem_used"] = ""
+    out.pop("mem_used_str", None)
     return out
 
 
@@ -99,12 +103,12 @@ def macos_memory_detail() -> dict:
         if not total:
             return {}
         return {
-            "mem_used": round(_gb(used), 1),
+            "mem_used": f"{_gb(used):.1f}/{_gb(total):.0f} GB",
+            "mem_used_gb": round(_gb(used), 1),
             "mem_total": round(_gb(total), 2),
             "mem_pct": _pct(used, total),
-            "mem_cached": round(_gb(cached), 1),
-            "mem_compressed": round(_gb(compressed), 1),
-            "mem_used_str": f"{_gb(used):.1f}/{_gb(total):.0f} GB",
+            "mem_cached": f"{_gb(cached):.1f} GB cached",
+            "mem_compressed": f"{_gb(compressed):.1f} GB",
             "_source": "vm_stat",
         }
     except Exception:

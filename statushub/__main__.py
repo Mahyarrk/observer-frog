@@ -72,9 +72,9 @@ def cmd_metrics(cfg: Config) -> int:
     card = metrics.device_card(cfg.node_id, cfg.node_name)
     print(f"{card['name']}  ({card['kind']})  {card['detail']}")
     print(f"  cpu      {card.get('cpu_pct')}%   uptime {card.get('uptime_h')} h")
-    print(f"  memory   {card.get('mem_used_str') or 'n/a'}  ({card.get('mem_pct')}%)")
+    print(f"  memory   {card.get('mem_used') or 'n/a'}  ({card.get('mem_pct')}%)")
     if card.get("swap_used") is not None:
-        print(f"  swap     {card['swap_used']} MB")
+        print(f"  swap     {card['swap_used']}")
     if card.get("disk_used"):
         print(f"  disk     {card['disk_used']}")
     if card.get("thermal"):
