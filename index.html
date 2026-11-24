@@ -15,11 +15,11 @@
   <meta name="format-detection" content="telephone=no" />
 
   <!-- Embedded SVG Favicon & Fallback Apple Touch Icon (Replaced dynamically with Canvas PNG for strict iOS compliance) -->
-  <link id="favicon-link" rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 180 180'%3E%3Crect width='180' height='180' rx='40' fill='%230f172a'/%3E%3Crect x='10' y='10' width='160' height='160' rx='32' fill='none' stroke='%231e293b' stroke-width='4'/%3E%3Ccircle cx='90' cy='90' r='52' fill='none' stroke='%2310b981' stroke-width='8' stroke-opacity='0.25'/%3E%3Cpath d='M38 90h26l14-34 24 68 16-46 12 12h12' fill='none' stroke='%2310b981' stroke-width='10' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
-  <link id="apple-touch-icon-link" rel="apple-touch-icon" sizes="180x180" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 180 180'%3E%3Crect width='180' height='180' fill='%230f172a'/%3E%3Ccircle cx='90' cy='90' r='56' fill='none' stroke='%2310b981' stroke-width='8' stroke-opacity='0.25'/%3E%3Cpath d='M38 90h26l14-34 24 68 16-46 12 12h12' fill='none' stroke='%2310b981' stroke-width='10' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
+  <link id="favicon-link" rel="icon" type="image/png" sizes="192x192" href="./icons/icon-192.png" />
+  <link id="apple-touch-icon-link" rel="apple-touch-icon" sizes="180x180" href="./icons/icon-180.png" />
 
   <!-- Embedded Web App Manifest (Data URI) -->
-  <link id="manifest-link" rel="manifest" href='data:application/manifest+json,{"name":"Status Hub","short_name":"Status Hub","description":"Local server and network status monitor","start_url":"/status/","scope":"/status/","display":"standalone","orientation":"portrait-primary","background_color":"#0f172a","theme_color":"#0f172a","icons":[{"src":"data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 180 180%27%3E%3Crect width=%27180%27 height=%27180%27 rx=%2740%27 fill=%27%230f172a%27/%3E%3Cpath d=%27M38 90h26l14-34 24 68 16-46 12 12h12%27 fill=%27none%27 stroke=%27%2310b981%27 stroke-width=%2710%27 stroke-linecap=%27round%27 stroke-linejoin=%27round%27/%3E%3C/svg%3E","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}]}' />
+  <link id="manifest-link" rel="manifest" href="./manifest.json" />
 
   <style>
     :root {
@@ -51,6 +51,37 @@
       --accent-blue: #38bdf8;
       --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Inter", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
       --font-mono: "SF Mono", "JetBrains Mono", "Fira Code", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+
+      /* Radius scale: four steps, replacing eleven ad-hoc values. --r-pill is any pill. */
+      --r-xs: 0.3rem;
+      --r-sm: 0.5rem;
+      --r-md: 0.7rem;
+      --r-lg: 1rem;
+      --r-pill: 999px;
+
+      /* Spacing scale, used by the card and list rhythm. */
+      --s-1: 0.25rem;
+      --s-2: 0.5rem;
+      --s-3: 0.75rem;
+      --s-4: 1rem;
+      --s-5: 1.5rem;
+      --s-6: 2rem;
+
+      /* Type roles: replaces 37 hand-written mono declarations and the ad-hoc sizes. */
+      --t-label: 0.6875rem;   /* small caps labels */
+      --t-meta: 0.75rem;      /* secondary metadata */
+      --t-body: 0.875rem;     /* card text */
+      --t-title: 1rem;        /* card titles */
+      --t-display: 1.75rem;   /* headline numbers */
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
+      }
     }
 
     * {
@@ -154,7 +185,7 @@
       position: relative;
       width: 2.5rem;
       height: 2.5rem;
-      border-radius: 1rem;
+      border-radius: var(--r-lg);
       background: #0f172a;
       border: 1px solid rgba(148, 163, 184, 0.25);
       display: flex;
@@ -171,7 +202,7 @@
       right: -2px;
       width: 10px;
       height: 10px;
-      border-radius: 9999px;
+      border-radius: var(--r-pill);
       background-color: #10b981;
       border: 2px solid #0f172a;
     }
@@ -187,7 +218,7 @@
     }
 
     .brand-title {
-      font-size: 1.05rem;
+      font-size: var(--t-title);
       font-weight: 600;
       letter-spacing: -0.02em;
       color: #ffffff;
@@ -196,10 +227,10 @@
 
     .live-api-badge {
       font-family: var(--font-mono);
-      font-size: 0.68rem;
+      font-size: var(--t-label);
       font-weight: 600;
       padding: 0.15rem 0.5rem;
-      border-radius: 9999px;
+      border-radius: var(--r-pill);
       background: rgba(16, 185, 129, 0.15);
       color: #6ee7b7;
       border: 1px solid rgba(16, 185, 129, 0.3);
@@ -207,7 +238,7 @@
     }
 
     .brand-url {
-      font-size: 0.75rem;
+      font-size: var(--t-meta);
       color: var(--text-muted);
       font-family: var(--font-mono);
       white-space: nowrap;
@@ -230,9 +261,9 @@
       gap: 0.5rem;
       background: rgba(15, 23, 42, 0.95);
       border: 1px solid rgba(148, 163, 184, 0.18);
-      border-radius: 0.75rem;
+      border-radius: var(--r-md);
       padding: 0.35rem 0.75rem;
-      font-size: 0.75rem;
+      font-size: var(--t-meta);
       color: var(--text-secondary);
       font-family: var(--font-mono);
       white-space: nowrap;
@@ -257,7 +288,7 @@
       height: 2.75rem;
       min-width: 44px;
       min-height: 44px;
-      border-radius: 0.75rem;
+      border-radius: var(--r-md);
       background: rgba(30, 41, 59, 0.9);
       border: 1px solid rgba(148, 163, 184, 0.2);
       color: var(--accent-blue);
@@ -289,13 +320,13 @@
       min-width: 0;
       padding-top: 0.5rem;
       border-top: 1px solid rgba(148, 163, 184, 0.1);
-      font-size: 0.75rem;
+      font-size: var(--t-meta);
     }
 
     .nav-tabs {
       display: inline-flex;
       padding: 0.2rem;
-      border-radius: 0.75rem;
+      border-radius: var(--r-md);
       background: rgba(15, 23, 42, 0.9);
       border: 1px solid rgba(148, 163, 184, 0.15);
       gap: 0.25rem;
@@ -304,8 +335,8 @@
     .nav-tab-btn {
       padding: 0.45rem 0.9rem;
       min-height: 38px;
-      border-radius: 0.5rem;
-      font-size: 0.75rem;
+      border-radius: var(--r-sm);
+      font-size: var(--t-meta);
       font-weight: 600;
       color: var(--text-primary);
       background: rgba(30, 41, 59, 0.9);
@@ -337,12 +368,12 @@
     .history-kpi {
       background: var(--bg-card);
       border: 1px solid var(--border-subtle);
-      border-radius: 0.75rem;
+      border-radius: var(--r-md);
       padding: 0.7rem 0.8rem;
     }
 
     .history-kpi .kpi-label {
-      font-size: 0.65rem;
+      font-size: var(--t-label);
       text-transform: uppercase;
       letter-spacing: 0.05em;
       color: var(--text-muted);
@@ -350,14 +381,14 @@
     }
 
     .history-kpi .kpi-value {
-      font-size: 1.35rem;
+      font-size: var(--t-display);
       font-weight: 700;
       font-family: var(--font-mono);
       margin-top: 0.15rem;
     }
 
     .history-kpi .kpi-sub {
-      font-size: 0.58rem;
+      font-size: var(--t-label);
       font-family: var(--font-mono);
       color: var(--text-muted);
       margin-top: 0.15rem;
@@ -395,22 +426,22 @@
       min-height: 44px;
       background: var(--bg-card);
       border: 1px solid var(--border-subtle);
-      border-radius: 0.6rem;
+      border-radius: var(--r-sm);
       color: var(--text-primary);
       padding: 0 0.75rem;
       font-family: inherit;
-      font-size: 0.85rem;
+      font-size: var(--t-body);
     }
 
     .history-reload {
       min-height: 44px;
       padding: 0 1rem;
-      border-radius: 0.6rem;
+      border-radius: var(--r-sm);
       background: rgba(30, 41, 59, 0.9);
       border: 1px solid rgba(148, 163, 184, 0.25);
       color: var(--text-primary);
       font-family: inherit;
-      font-size: 0.8rem;
+      font-size: var(--t-meta);
       font-weight: 600;
       cursor: pointer;
     }
@@ -418,20 +449,20 @@
     .history-table-wrap {
       background: var(--bg-card);
       border: 1px solid var(--border-subtle);
-      border-radius: 0.75rem;
+      border-radius: var(--r-md);
       overflow-x: auto;
     }
 
     .history-table {
       width: 100%;
       border-collapse: collapse;
-      font-size: 0.8rem;
+      font-size: var(--t-meta);
     }
 
     .history-table th {
       text-align: left;
       padding: 0.6rem 0.7rem;
-      font-size: 0.65rem;
+      font-size: var(--t-label);
       text-transform: uppercase;
       letter-spacing: 0.04em;
       color: var(--text-muted);
@@ -453,13 +484,13 @@
 
     .stamp-intended {
       font-family: var(--font-mono);
-      font-size: 0.6rem;
+      font-size: var(--t-label);
       text-transform: uppercase;
       letter-spacing: 0.04em;
       color: #7dd3fc;
       border: 1px solid rgba(56, 189, 248, 0.4);
       background: rgba(56, 189, 248, 0.12);
-      border-radius: 0.3rem;
+      border-radius: var(--r-xs);
       padding: 0.05rem 0.3rem;
       margin-left: 0.3rem;
     }
@@ -467,7 +498,7 @@
     .uptime-bar {
       position: relative;
       height: 8px;
-      border-radius: 999px;
+      border-radius: var(--r-pill);
       background: rgba(148, 163, 184, 0.18);
       overflow: hidden;
       min-width: 80px;
@@ -477,7 +508,7 @@
       position: absolute;
       inset: 0 auto 0 0;
       background: #10b981;
-      border-radius: 999px;
+      border-radius: var(--r-pill);
     }
 
     .uptime-bar.warn > span { background: #f59e0b; }
@@ -487,11 +518,11 @@
       padding: 2rem 1rem;
       text-align: center;
       color: var(--text-muted);
-      font-size: 0.85rem;
+      font-size: var(--t-body);
     }
 
     .history-section-title {
-      font-size: 0.7rem;
+      font-size: var(--t-label);
       text-transform: uppercase;
       letter-spacing: 0.05em;
       color: var(--text-muted);
@@ -501,9 +532,9 @@
 
     .tab-badge {
       font-family: var(--font-mono);
-      font-size: 0.65rem;
+      font-size: var(--t-label);
       padding: 0.1rem 0.4rem;
-      border-radius: 0.35rem;
+      border-radius: var(--r-xs);
       background: rgba(16, 185, 129, 0.2);
       color: #6ee7b7;
       border: 1px solid rgba(16, 185, 129, 0.3);
@@ -511,7 +542,7 @@
 
     .header-sub-meta {
       font-family: var(--font-mono);
-      font-size: 0.7rem;
+      font-size: var(--t-label);
       color: var(--text-muted);
       display: flex;
       align-items: center;
@@ -543,7 +574,7 @@
       position: relative;
       width: 2.35rem;
       height: 2.35rem;
-      border-radius: 0.65rem;
+      border-radius: var(--r-md);
       background: var(--bg-card);
       border: 1px solid var(--border-subtle);
       color: var(--text-primary);
@@ -594,7 +625,7 @@
     .overview-banner {
       position: relative;
       overflow: hidden;
-      border-radius: 1rem;
+      border-radius: var(--r-lg);
       padding: 1rem 1.15rem;
       background: #1e293b;
       border: 1px solid var(--border-subtle);
@@ -630,7 +661,7 @@
     }
 
     .banner-headline {
-      font-size: 0.95rem;
+      font-size: var(--t-body);
       font-weight: 700;
       letter-spacing: -0.015em;
       color: var(--text-primary);
@@ -640,7 +671,7 @@
     }
 
     .banner-sub {
-      font-size: 0.72rem;
+      font-size: var(--t-label);
       color: var(--text-secondary);
       margin-top: 0.15rem;
       white-space: nowrap;
@@ -658,7 +689,7 @@
       position: relative;
       width: 2.5rem;
       height: 2.5rem;
-      border-radius: 999px;
+      border-radius: var(--r-pill);
       display: flex;
       align-items: center;
       justify-content: center;
@@ -686,7 +717,7 @@
     .orb-pulse {
       position: absolute;
       inset: 0;
-      border-radius: 999px;
+      border-radius: var(--r-pill);
       animation: pulseHalo 2.4s ease-out infinite;
     }
 
@@ -700,14 +731,14 @@
     }
 
     .banner-headline {
-      font-size: 1.05rem;
+      font-size: var(--t-title);
       font-weight: 700;
       letter-spacing: -0.015em;
       color: var(--text-primary);
     }
 
     .banner-sub {
-      font-size: 0.78rem;
+      font-size: var(--t-meta);
       color: var(--text-secondary);
       margin-top: 0.15rem;
       display: flex;
@@ -725,10 +756,10 @@
 
     .summary-chip {
       font-family: var(--font-mono);
-      font-size: 0.62rem;
+      font-size: var(--t-label);
       font-weight: 600;
       padding: 0.16rem 0.42rem;
-      border-radius: 0.4rem;
+      border-radius: var(--r-sm);
       border: 1px solid var(--border-subtle);
       background: var(--bg-subtle);
       display: inline-flex;
@@ -785,11 +816,11 @@
       justify-content: space-between;
       gap: 0.75rem;
       padding: 0.55rem 0.85rem;
-      border-radius: 0.65rem;
+      border-radius: var(--r-md);
       background: rgba(245, 158, 11, 0.18);
       border: 1px solid rgba(245, 158, 11, 0.45);
       color: #fde68a;
-      font-size: 0.75rem;
+      font-size: var(--t-meta);
       margin-bottom: 0.35rem;
     }
 
@@ -801,7 +832,7 @@
       display: inline-block;
       width: 8px;
       height: 8px;
-      border-radius: 9999px;
+      border-radius: var(--r-pill);
       background-color: #f59e0b;
       box-shadow: 0 0 8px #f59e0b;
       flex-shrink: 0;
@@ -809,10 +840,10 @@
 
     .offline-pill {
       font-family: var(--font-mono);
-      font-size: 0.65rem;
+      font-size: var(--t-label);
       font-weight: 700;
       padding: 0.15rem 0.45rem;
-      border-radius: 0.35rem;
+      border-radius: var(--r-xs);
       background: rgba(245, 158, 11, 0.2);
       color: #fde68a;
       border: 1px solid rgba(245, 158, 11, 0.35);
@@ -822,10 +853,10 @@
 
     .stale-badge {
       font-family: var(--font-mono);
-      font-size: 0.62rem;
+      font-size: var(--t-label);
       font-weight: 600;
       padding: 0.12rem 0.4rem;
-      border-radius: 0.35rem;
+      border-radius: var(--r-xs);
       background: rgba(245, 158, 11, 0.15);
       color: #fde68a;
       border: 1px solid rgba(245, 158, 11, 0.3);
@@ -834,10 +865,10 @@
 
     .intended-badge {
       font-family: var(--font-mono);
-      font-size: 0.62rem;
+      font-size: var(--t-label);
       font-weight: 600;
       padding: 0.12rem 0.4rem;
-      border-radius: 0.35rem;
+      border-radius: var(--r-xs);
       background: rgba(56, 189, 248, 0.14);
       color: #7dd3fc;
       border: 1px solid rgba(56, 189, 248, 0.4);
@@ -878,7 +909,7 @@
     }
 
     .group-title {
-      font-size: 0.78rem;
+      font-size: var(--t-meta);
       font-weight: 700;
       text-transform: uppercase;
       letter-spacing: 0.07em;
@@ -930,12 +961,12 @@
 
     .group-count {
       font-family: var(--font-mono);
-      font-size: 0.7rem;
+      font-size: var(--t-label);
       color: var(--text-muted);
       background: rgba(30, 41, 59, 0.65);
       border: 1px solid var(--border-subtle);
       padding: 0.1rem 0.45rem;
-      border-radius: 999px;
+      border-radius: var(--r-pill);
     }
 
     /* Collapsible Domain Groups */
@@ -959,7 +990,7 @@
       padding: 0.6rem 0.4rem;
       min-height: 44px;
       box-sizing: border-box;
-      border-radius: 0.5rem;
+      border-radius: var(--r-sm);
     }
 
     .group-details > summary:active .group-header {
@@ -998,7 +1029,7 @@
     .service-card {
       background: var(--bg-card);
       border: 1px solid var(--border-subtle);
-      border-radius: 0.875rem;
+      border-radius: var(--r-lg);
       padding: 0.95rem 1.05rem;
       display: flex;
       flex-direction: column;
@@ -1043,7 +1074,7 @@
     }
 
     .service-name {
-      font-size: 0.95rem;
+      font-size: var(--t-body);
       font-weight: 600;
       color: var(--text-primary);
       letter-spacing: -0.01em;
@@ -1069,7 +1100,7 @@
 
     .service-id {
       font-family: var(--font-mono);
-      font-size: 0.68rem;
+      font-size: var(--t-label);
       color: var(--text-muted);
       margin-top: 0.12rem;
     }
@@ -1080,11 +1111,11 @@
       align-items: center;
       gap: 0.35rem;
       font-family: var(--font-mono);
-      font-size: 0.68rem;
+      font-size: var(--t-label);
       font-weight: 700;
       letter-spacing: 0.04em;
       padding: 0.22rem 0.55rem;
-      border-radius: 999px;
+      border-radius: var(--r-pill);
       text-transform: uppercase;
       flex-shrink: 0;
     }
@@ -1092,7 +1123,7 @@
     .status-pill .dot {
       width: 6px;
       height: 6px;
-      border-radius: 999px;
+      border-radius: var(--r-pill);
     }
 
     .pill-up {
@@ -1145,12 +1176,12 @@
 
     .detail-badge {
       font-family: var(--font-mono);
-      font-size: 0.72rem;
+      font-size: var(--t-label);
       color: var(--text-secondary);
       background: var(--bg-subtle);
       border: 1px solid rgba(148, 163, 184, 0.1);
       padding: 0.18rem 0.48rem;
-      border-radius: 0.375rem;
+      border-radius: var(--r-sm);
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -1159,7 +1190,7 @@
 
     .latency-badge {
       font-family: var(--font-mono);
-      font-size: 0.7rem;
+      font-size: var(--t-label);
       font-weight: 500;
       color: var(--text-muted);
       display: inline-flex;
@@ -1173,12 +1204,12 @@
 
     .port-badge {
       font-family: var(--font-mono);
-      font-size: 0.66rem;
+      font-size: var(--t-label);
       color: var(--accent-blue);
       background: rgba(56, 189, 248, 0.08);
       border: 1px solid rgba(56, 189, 248, 0.22);
       padding: 0.14rem 0.4rem;
-      border-radius: 0.35rem;
+      border-radius: var(--r-xs);
       white-space: nowrap;
       flex-shrink: 0;
     }
@@ -1239,7 +1270,7 @@
       align-items: center;
       gap: 0.4rem;
       font-family: var(--font-mono);
-      font-size: 0.7rem;
+      font-size: var(--t-label);
       color: var(--text-muted);
       cursor: pointer;
       list-style: none;
@@ -1272,14 +1303,14 @@
       justify-content: space-between;
       gap: 0.6rem;
       padding: 0.32rem 0.55rem;
-      border-radius: 0.45rem;
+      border-radius: var(--r-sm);
       background: var(--bg-subtle);
       border: 1px solid rgba(148, 163, 184, 0.1);
     }
 
     .child-name {
       font-family: var(--font-mono);
-      font-size: 0.72rem;
+      font-size: var(--t-label);
       color: var(--text-primary);
       white-space: nowrap;
       overflow: hidden;
@@ -1288,7 +1319,7 @@
 
     .child-status {
       font-family: var(--font-mono);
-      font-size: 0.66rem;
+      font-size: var(--t-label);
       font-weight: 600;
       white-space: nowrap;
       flex-shrink: 0;
@@ -1307,10 +1338,10 @@
     }
     .ctl-btn {
       font-family: var(--font-mono);
-      font-size: 0.66rem;
+      font-size: var(--t-label);
       font-weight: 600;
       padding: 0.3rem 0.72rem;
-      border-radius: 8px;
+      border-radius: var(--r-sm);
       border: 1px solid var(--border-highlight);
       background: rgba(100, 116, 139, 0.15);
       color: var(--text-secondary);
@@ -1336,7 +1367,7 @@
     }
     .ctl-msg {
       font-family: var(--font-mono);
-      font-size: 0.6rem;
+      font-size: var(--t-label);
       color: var(--text-muted);
     }
     /* Category Sections (Mac / Linux Server) */
@@ -1375,14 +1406,14 @@
     .dm-bar {
       display: block;
       height: 4px;
-      border-radius: 99px;
+      border-radius: var(--r-pill);
       background: var(--bg-subtle);
       overflow: hidden;
     }
     .dm-bar > span {
       display: block;
       height: 100%;
-      border-radius: 99px;
+      border-radius: var(--r-pill);
       background: var(--accent-blue);
       transition: width .4s ease;
     }
@@ -1394,7 +1425,7 @@
       flex-direction: column;
       gap: 0.85rem;
       padding: 0.85rem 0.85rem 1rem 0.85rem;
-      border-radius: 1rem;
+      border-radius: var(--r-lg);
       background: rgba(15, 23, 42, 0.45);
       border: 1px solid var(--border-subtle);
     }
@@ -1407,7 +1438,7 @@
     }
 
     .category-title {
-      font-size: 0.85rem;
+      font-size: var(--t-body);
       font-weight: 800;
       text-transform: uppercase;
       letter-spacing: 0.09em;
@@ -1416,12 +1447,12 @@
 
     .category-count {
       font-family: var(--font-mono);
-      font-size: 0.68rem;
+      font-size: var(--t-label);
       color: var(--text-muted);
       background: rgba(30, 41, 59, 0.65);
       border: 1px solid var(--border-subtle);
       padding: 0.12rem 0.5rem;
-      border-radius: 999px;
+      border-radius: var(--r-pill);
       white-space: nowrap;
     }
 
@@ -1435,10 +1466,10 @@
 
     .ignore-btn {
       font-family: var(--font-mono);
-      font-size: 0.64rem;
+      font-size: var(--t-label);
       font-weight: 600;
       padding: 0.22rem 0.55rem;
-      border-radius: 999px;
+      border-radius: var(--r-pill);
       background: rgba(100, 116, 139, 0.15);
       color: var(--text-secondary);
       border: 1px solid rgba(148, 163, 184, 0.25);
@@ -1488,7 +1519,7 @@
       justify-content: space-between;
       flex-wrap: wrap;
       gap: 0.5rem;
-      font-size: 0.72rem;
+      font-size: var(--t-label);
       color: var(--text-muted);
       font-family: var(--font-mono);
     }
@@ -1516,7 +1547,7 @@
       <div id="connection-alert" class="connection-alert" role="alert">
         <div style="display: flex; align-items: center; gap: 0.6rem; min-width: 0;">
           <span class="offline-pulse-dot" aria-hidden="true"></span>
-          <span id="connection-alert-text" style="font-family: var(--font-mono); font-size: 0.74rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Offline • Displaying cached snapshot. Reconnecting...</span>
+          <span id="connection-alert-text" style="font-family: var(--font-mono); font-size: var(--t-meta); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Offline • Displaying cached snapshot. Reconnecting...</span>
         </div>
         <span class="offline-pill">CACHED</span>
       </div>
@@ -1641,7 +1672,7 @@
         <input id="history-search" class="history-search" type="search" placeholder="Filter by service or reason…" autocomplete="off">
         <button id="history-reload" class="history-reload" type="button">Reload</button>
       </div>
-      <div id="history-meta" style="font-family: var(--font-mono); font-size: 0.65rem; color: var(--text-muted); margin-bottom: 0.6rem;">—</div>
+      <div id="history-meta" style="font-family: var(--font-mono); font-size: var(--t-label); color: var(--text-muted); margin-bottom: 0.6rem;">—</div>
 
       <div class="history-section-title">Incident log</div>
       <div class="history-table-wrap">
@@ -2602,11 +2633,11 @@
               ? '<span class="inc-ongoing">ONGOING</span>'
               : '<span class="inc-closed">recovered</span>';
             return '<tr>' +
-              '<td><strong>' + escapeHtml(i.name) + '</strong>' + (i.intentional ? ' <span class="stamp-intended">intended</span>' : '') + '<br><span style="color: var(--text-muted); font-size: 0.72rem;">' + escapeHtml(i.group || '') + '</span></td>' +
+              '<td><strong>' + escapeHtml(i.name) + '</strong>' + (i.intentional ? ' <span class="stamp-intended">intended</span>' : '') + '<br><span style="color: var(--text-muted); font-size: var(--t-label);">' + escapeHtml(i.group || '') + '</span></td>' +
               '<td>' + fmtAbs(i.started_ts) + '</td>' +
               '<td>' + (i.ongoing ? state : fmtAbs(i.ended_ts)) + '</td>' +
               '<td style="font-family: var(--font-mono);">' + fmtDur(i.duration_s) + '</td>' +
-              '<td style="color: var(--text-muted); font-size: 0.74rem;">' + escapeHtml(i.detail || '') + '</td>' +
+              '<td style="color: var(--text-muted); font-size: var(--t-meta);">' + escapeHtml(i.detail || '') + '</td>' +
               '</tr>';
           }).join('');
         }
@@ -2620,7 +2651,7 @@
             const cls = pct >= 99.5 ? '' : (pct >= 95 ? ' warn' : ' bad');
             return '<tr>' +
               '<td><strong>' + escapeHtml(u.name) + '</strong></td>' +
-              '<td style="color: var(--text-muted); font-size: 0.74rem;">' + escapeHtml(u.group || '') + '</td>' +
+              '<td style="color: var(--text-muted); font-size: var(--t-meta);">' + escapeHtml(u.group || '') + '</td>' +
               '<td><div style="display:flex; align-items:center; gap:0.5rem;"><div class="uptime-bar' + cls + '"><span style="width:' + Math.max(2, Math.min(100, pct)) + '%;"></span></div>' +
               '<span style="font-family: var(--font-mono); white-space:nowrap;">' + pct.toFixed(2) + '%</span></div></td>' +
               '<td style="font-family: var(--font-mono); color: var(--text-muted);">' + (u.checks || 0) + '</td>' +

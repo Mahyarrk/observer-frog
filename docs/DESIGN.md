@@ -59,6 +59,13 @@ e.g. `"9.6/16 GB"`), `mem_pct`, `uptime_h`, `temp_c` (null where unreadable), pl
 `thermal`, `mem_cached`, `mem_compressed`, `swap_used`, `disk_used`. Pre-formatted strings are kept
 for renderer compatibility; raw numbers are added alongside.
 
+**Dropped field: `control`.** The original payload carried a `control` action id on one service
+(Terraria), which the UI renders as a start/stop button that POSTs to `/api/action`. That endpoint
+was an SSH command channel. v0.1 has no control paths at all — the server never emits `control`, so
+the UI's own conditional (`if (svc.control)`) renders nothing. The frontend code stays as it is; the
+capability is absent by omission, which is cheaper and safer than deleting UI that a future version
+may want back with proper auth.
+
 `GET /api/history?days=N` → `{generated, window_days, incidents[], uptime{}, kpi{}}`;
 `incidents[]`: `{id, service_id, name, group, started_ts, ended_ts|null, ongoing, duration_s, detail, intentional}`.
 

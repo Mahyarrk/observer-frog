@@ -27,6 +27,9 @@ STATIC_FILES = {
     "/index.html": ("index.html", "text/html; charset=utf-8"),
     "/sw.js": ("sw.js", "application/javascript; charset=utf-8"),
     "/manifest.json": ("manifest.json", "application/manifest+json; charset=utf-8"),
+    "/icons/icon-180.png": ("icons/icon-180.png", "image/png"),
+    "/icons/icon-192.png": ("icons/icon-192.png", "image/png"),
+    "/icons/icon-512.png": ("icons/icon-512.png", "image/png"),
 }
 MIN_FORCED_POLL_S = 2.0      # a phone holding refresh must not hammer every monitored target
 HISTORY_POINTS = 7
