@@ -1933,6 +1933,9 @@
             saveIgnoredServices();
             if (currentData) currentData.ignored = body.ignored_ids;
             renderDashboard(currentData);
+            // ignoring a service moves it between the red and amber buckets, so the History
+            // counters are stale the moment this succeeds
+            if (typeof fetchHistory === 'function') fetchHistory(true);
           }
         }).catch(() => {});
       }
@@ -2515,8 +2518,17 @@
 
       function startPollingLoop() {
         if (tickTimer) clearInterval(tickTimer);
+        let historyTick = 0;
         tickTimer = setInterval(() => {
           countdownSec -= 1;
+          // The History tab holds its own payload; without this it loaded once and froze, so
+          // counts stayed wrong after any flag change or new incident.
+          if (activeTab === 'history') {
+            historyTick += 1;
+            if (historyTick >= 20) { historyTick = 0; fetchHistory(true); }
+          } else {
+            historyTick = 0;
+          }
           const isOfflineMode = elConnectionAlert.classList.contains('visible');
           if (isOfflineMode && countdownSec > 5) {
             countdownSec = 5;

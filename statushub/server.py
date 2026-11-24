@@ -262,8 +262,15 @@ def make_handler(app: App):
                     self._json(500, {"ok": False, "error": clip(str(e))})
                     return
                 ignored, intentional = db.flags(app.cfg.db_path, app.cfg.node_id)
-                self._json(200, {"ok": True, "id": sid, field: want,
-                                 "ignored": ignored, "intentional": intentional})
+                # Both shapes: the flag as a boolean for this id, and the full `*_ids` lists the
+                # UI actually reads back. The lists were missing, so the client kept its optimistic
+                # guess and never learned the server's truth.
+                self._json(200, {
+                    "ok": True, "id": sid,
+                    field: want,
+                    "ignored": ignored, "ignored_ids": ignored,
+                    "intentional": intentional, "intentional_ids": intentional,
+                })
             return handle
 
     return Handler
