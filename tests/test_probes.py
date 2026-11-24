@@ -220,7 +220,22 @@ class DispatchTests(unittest.TestCase):
         with mock.patch.object(probes, "probe_tcp", side_effect=RuntimeError("boom")):
             state, detail, _ = probes.run(svc)
         self.assertEqual(state, "unavailable")
-        self.assertIn("boom", detail)
+        self.assertIn("probe error", detail)
+
+    def test_probe_error_detail_never_leaks_a_traceback(self):
+        """A card must show a phrase, not `RuntimeError: boom at line 42`."""
+        svc = Service(id="x", probe="tcp", target="127.0.0.1:1")
+        with mock.patch.object(probes, "probe_tcp", side_effect=RuntimeError("boom")):
+            _, detail, _ = probes.run(svc)
+        self.assertNotIn("boom", detail)
+        self.assertNotIn("Traceback", detail)
+
+    def test_connection_refused_reads_as_english(self):
+        state, detail, _ = probes.probe_http("http://127.0.0.1:1/v1/models", timeout=0.5)
+        self.assertEqual(state, "down")
+        self.assertEqual(detail, "connection refused")
+        self.assertNotIn("urlopen", detail)
+        self.assertNotIn("Errno", detail)
 
     def test_detail_is_clipped(self):
         self.assertLessEqual(len(probes.clip("y" * 500)), probes.DETAIL_MAX)

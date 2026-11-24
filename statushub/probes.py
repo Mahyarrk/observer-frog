@@ -41,6 +41,32 @@ def clip(text: str) -> str:
     return text if len(text) <= DETAIL_MAX else text[: DETAIL_MAX - 1] + "…"
 
 
+def _human_error(e: Exception) -> str:
+    """Turn an exception into a phrase a person can read on a phone.
+
+    A raw `URLError: <urlopen error [Errno 61] Connection refused>` in a status card is the least
+    professional thing this tool can print, and it is truncated anyway.
+    """
+    text = str(e).lower()
+    if isinstance(e, urllib.error.URLError) or "urlopen error" in text:
+        if "refused" in text:
+            return "connection refused"
+        if "timed out" in text or "timeout" in text:
+            return "timed out"
+        if "name or service not known" in text or "nodename" in text:
+            return "host not found"
+        if "certificate" in text or "ssl" in text:
+            return "TLS error"
+        return "connection failed"
+    if isinstance(e, ConnectionRefusedError):
+        return "connection refused"
+    if isinstance(e, (socket.timeout, TimeoutError)):
+        return "timed out"
+    if isinstance(e, socket.gaierror):
+        return "host not found"
+    return type(e).__name__.replace("Error", " error").strip().lower() or "probe failed"
+
+
 def _result(state: str, detail: str, ms: int) -> tuple[str, str, int]:
     return state, clip(detail), max(0, int(ms))
 
@@ -76,7 +102,7 @@ def probe_http(url: str, expect_status: int = 0, contains: str = "", timeout: fl
             return _result(STATE_UP, f"HTTP {e.code}" + (" (Auth)" if e.code == 401 else ""), ms)
         return _result(STATE_DEGRADED, f"HTTP {e.code}", ms)
     except Exception as e:
-        return _result(STATE_DOWN, f"{type(e).__name__}: {e}", int((time.time() - t0) * 1000))
+        return _result(STATE_DOWN, _human_error(e), int((time.time() - t0) * 1000))
 
 
 # ---------------------------------------------------------------- tcp
@@ -107,7 +133,7 @@ def probe_tcp(target: str, timeout: float = 1.5) -> tuple[str, str, int]:
     except ConnectionRefusedError:
         return _result(STATE_DOWN, "connection refused", int((time.time() - t0) * 1000))
     except OSError as e:
-        return _result(STATE_DOWN, f"{type(e).__name__}: {e}", int((time.time() - t0) * 1000))
+        return _result(STATE_DOWN, _human_error(e), int((time.time() - t0) * 1000))
 
 
 # ---------------------------------------------------------------- process
@@ -150,7 +176,7 @@ def probe_process(pattern: str) -> tuple[str, str, int]:
                 ms = int((time.time() - t0) * 1000)
                 return _result(STATE_UP, clip(cmd), ms)
     except Exception as e:
-        return _result(STATE_UNAVAILABLE, f"{type(e).__name__}: {e}", 0)
+        return _result(STATE_UNAVAILABLE, _human_error(e), 0)
     return _result(STATE_DOWN, "not running", int((time.time() - t0) * 1000))
 
 
@@ -166,7 +192,7 @@ def probe_file_age(path: str, max_age_s: int) -> tuple[str, str, int]:
     except FileNotFoundError:
         return _result(STATE_DOWN, "file missing", 0)
     except OSError as e:
-        return _result(STATE_UNAVAILABLE, f"{type(e).__name__}: {e}", 0)
+        return _result(STATE_UNAVAILABLE, _human_error(e), 0)
     if age <= max_age_s:
         return _result(STATE_UP, f"updated {_fmt_age(age)} ago", 0)
     return _result(STATE_DEGRADED, f"stale: {_fmt_age(age)} old", 0)
@@ -205,7 +231,7 @@ def probe_file_json(path: str, field: str = "", contains: str = "") -> tuple[str
     except FileNotFoundError:
         return _result(STATE_DOWN, "file missing", 0)
     except OSError as e:
-        return _result(STATE_UNAVAILABLE, f"{type(e).__name__}: {e}", 0)
+        return _result(STATE_UNAVAILABLE, _human_error(e), 0)
     try:
         data = json.loads(raw)
     except json.JSONDecodeError as e:
@@ -240,7 +266,7 @@ def run(service, node_platform: str | None = None) -> tuple[str, str, int]:
             return probe_file_json(service.target, service.field, service.contains)
         return _result(STATE_UNAVAILABLE, f"unknown probe {kind!r}", 0)
     except Exception as e:  # a probe bug is never an outage
-        return _result(STATE_UNAVAILABLE, f"probe error: {type(e).__name__}: {e}", 0)
+        return _result(STATE_UNAVAILABLE, "probe error: " + _human_error(e), 0)
 
 
 # ---------------------------------------------------------------- platform capabilities

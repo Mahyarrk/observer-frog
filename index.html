@@ -325,6 +325,8 @@
 
     .nav-tabs {
       display: inline-flex;
+      flex-wrap: wrap;
+      max-width: 100%;
       padding: 0.2rem;
       border-radius: var(--r-md);
       background: rgba(15, 23, 42, 0.9);
@@ -333,8 +335,9 @@
     }
 
     .nav-tab-btn {
-      padding: 0.45rem 0.9rem;
-      min-height: 38px;
+      padding: 0.45rem 0.7rem;
+      min-height: 44px;
+      min-width: 0;
       border-radius: var(--r-sm);
       font-size: var(--t-meta);
       font-weight: 600;
@@ -1566,7 +1569,7 @@
               <h1 class="brand-title">Status Hub</h1>
               <span class="live-api-badge">LIVE API</span>
             </div>
-            <div class="brand-url">https://192.0.2.190/status/</div>
+            <div class="brand-url" id="brand-url">connecting…</div>
           </div>
         </div>
       </div>
@@ -1603,7 +1606,7 @@
           </button>
         </div>
         <div class="header-sub-meta">
-          <span>PORT 443</span>
+          <span id="brand-port">PORT —</span>
           <span style="color: #334155;">•</span>
           <span style="color: #10b981;">PWA READY</span>
         </div>
@@ -1725,6 +1728,13 @@
       'use strict';
 
       const API_BASE = (window.location.pathname.replace(/\/$/, '') || '');
+      // Show the address actually in use, not a baked-in host.
+      (function () {
+        const el = document.getElementById('brand-url');
+        if (el) el.textContent = window.location.origin + (API_BASE || '/');
+        const portEl = document.getElementById('brand-port');
+        if (portEl) portEl.textContent = 'PORT ' + (window.location.port || (window.location.protocol === 'https:' ? '443' : '80'));
+      })();
       const API_ENDPOINT = API_BASE + '/api/status';
       const POLL_ENDPOINT = API_BASE + '/api/poll';
       const POLL_INTERVAL_SEC = 30;

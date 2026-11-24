@@ -80,7 +80,8 @@ class SampleTests(unittest.TestCase):
         with mock.patch.object(probes, "probe_tcp", side_effect=RuntimeError("kaboom")):
             row = poller.sample([svc(1, "tcp", "127.0.0.1:1")])[0]
         self.assertEqual(row["status"], "unavailable")
-        self.assertIn("kaboom", row["detail"])
+        self.assertIn("probe error", row["detail"])
+        self.assertNotIn("kaboom", row["detail"])
 
 
 class PollerLoopTests(unittest.TestCase):
