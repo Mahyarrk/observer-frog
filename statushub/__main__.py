@@ -1,6 +1,6 @@
-"""CLI entry point: `python -m statushub [status|config|version]`.
+"""CLI entry point: `python -m statushub [status|config|catalog|add|version]`.
 
-`serve` arrives with the HTTP server; until then these two report real state, not placeholders.
+Until the HTTP server lands, `serve` is intentionally absent rather than faked.
 """
 
 from __future__ import annotations
@@ -8,7 +8,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from . import __version__, db
+from . import __version__, catalog, db
 from .config import Config, ConfigError, load
 
 
@@ -31,6 +31,41 @@ def cmd_config(cfg: Config) -> int:
     return 0
 
 
+def cmd_catalog(entries, query: str | None) -> int:
+    rows = entries
+    if query:
+        q = query.lower()
+        rows = [e for e in rows if q in e.id or q in e.name.lower() or q in e.group.lower()]
+    group = None
+    for e in rows:
+        if e.group != group:
+            group = e.group
+            print(f"\n{group}")
+        port = f":{e.default_port}" if e.default_port else ""
+        sig = "signed" if e.has_signature() else ""
+        print(f"  {e.id:18s} {e.name:22s} {e.probe:8s}{port:6s} {sig}")
+    print(f"\n{len(rows)} entr{'y' if len(rows) == 1 else 'ies'}")
+    return 0
+
+
+def cmd_add(cfg: Config, entries, cid: str, host: str, port: int | None, instance: str) -> int:
+    """Print the config block for a catalog entry. Prints; never writes."""
+    entry = catalog.by_id(entries, cid)
+    if entry is None:
+        print(f"no catalog entry {cid!r}; run `catalog` to list ids", file=sys.stderr)
+        return 2
+    if entry.probe in ("file_age", "file_json"):
+        print(f"{cid} needs a path and threshold; add it by hand", file=sys.stderr)
+        return 2
+    svc = catalog.instantiate(entry, host=host, port=port, instance=instance)
+    if svc.id in cfg.service_ids():
+        print(f"service {svc.id!r} already exists in {cfg.path}", file=sys.stderr)
+        return 1
+    print(f"# add to {cfg.path or '(your config.toml)'}")
+    print(catalog.to_toml(svc))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="observer-frog", description="status dashboard for your machines")
     ap.add_argument("--config", help="path to config.toml")
@@ -38,16 +73,28 @@ def main(argv: list[str] | None = None) -> int:
     sub = ap.add_subparsers(dest="cmd")
     sub.add_parser("status", help="show resolved configuration and database state")
     sub.add_parser("config", help="print resolved settings")
+    p_cat = sub.add_parser("catalog", help="list services that ship with a ready-made definition")
+    p_cat.add_argument("query", nargs="?", help="filter by id, name or group")
+    p_add = sub.add_parser("add", help="print the config block for a catalog service")
+    p_add.add_argument("id", help="catalog id, e.g. syncthing")
+    p_add.add_argument("--host", default="127.0.0.1")
+    p_add.add_argument("--port", type=int, default=None, help="override the default port")
+    p_add.add_argument("--instance", default="", help="suffix for a second copy, e.g. 2")
     args = ap.parse_args(argv)
 
     try:
         cfg = load(args.config)
+        entries = catalog.load()
     except ConfigError as e:
         print(f"config error: {e}", file=sys.stderr)
         return 2
 
     if args.cmd == "config":
         return cmd_config(cfg)
+    if args.cmd == "catalog":
+        return cmd_catalog(entries, args.query)
+    if args.cmd == "add":
+        return cmd_add(cfg, entries, args.id, args.host, args.port, args.instance)
     return cmd_status(cfg)
 
 
