@@ -105,9 +105,18 @@ frontend invariants added during the design of this build. Each has a test named
 
 ## Parity
 
-The refactor is verified against a golden baseline captured from the original installation, held
-outside this repository (it contains host-specific topology). Scope: locally-probed services only;
-remote-node services are a declared gap restored when push nodes land.
+The refactor is verified against a golden baseline captured from the original installation. That
+harness lives **outside this repository** at `~/workspace/statushub-migration/` — it holds golden
+payloads containing host-specific topology (LAN addresses, local paths, service inventory), which
+must never be committed. The repository keeps only this contract and the shape tests built on
+synthetic data.
+
+Scope: locally-probed services only; remote-node services are a declared gap (`lx_*` ids) restored
+when push nodes land.
+
+**Epoch convention:** every timestamp in the payload and the database is an absolute epoch second
+(`int(time.time())`), never a local-naive string and never milliseconds. Durations subtract
+directly; nothing needs normalising. Verified against a live instance, not assumed.
 
 ## Layout
 
