@@ -1,0 +1,14 @@
+status.db
+status.db-wal
+status.db-shm
+certs/
+*.log
+config.local.toml
+config.toml
+__pycache__/
+*.pyc
+.venv/
+dist/
+build/
+*.spec
+.DS_Store

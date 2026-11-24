@@ -1,0 +1,2751 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <title>Status Hub • Node Monitor</title>
+  <meta name="description" content="Local Server & Network Service Status Dashboard" />
+
+  <!-- Theme & Strict iOS Standalone PWA Meta Tags -->
+  <meta name="theme-color" content="#0f172a" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="Status Hub" />
+  <meta name="format-detection" content="telephone=no" />
+
+  <!-- Embedded SVG Favicon & Fallback Apple Touch Icon (Replaced dynamically with Canvas PNG for strict iOS compliance) -->
+  <link id="favicon-link" rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 180 180'%3E%3Crect width='180' height='180' rx='40' fill='%230f172a'/%3E%3Crect x='10' y='10' width='160' height='160' rx='32' fill='none' stroke='%231e293b' stroke-width='4'/%3E%3Ccircle cx='90' cy='90' r='52' fill='none' stroke='%2310b981' stroke-width='8' stroke-opacity='0.25'/%3E%3Cpath d='M38 90h26l14-34 24 68 16-46 12 12h12' fill='none' stroke='%2310b981' stroke-width='10' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
+  <link id="apple-touch-icon-link" rel="apple-touch-icon" sizes="180x180" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 180 180'%3E%3Crect width='180' height='180' fill='%230f172a'/%3E%3Ccircle cx='90' cy='90' r='56' fill='none' stroke='%2310b981' stroke-width='8' stroke-opacity='0.25'/%3E%3Cpath d='M38 90h26l14-34 24 68 16-46 12 12h12' fill='none' stroke='%2310b981' stroke-width='10' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
+
+  <!-- Embedded Web App Manifest (Data URI) -->
+  <link id="manifest-link" rel="manifest" href='data:application/manifest+json,{"name":"Status Hub","short_name":"Status Hub","description":"Local server and network status monitor","start_url":"/status/","scope":"/status/","display":"standalone","orientation":"portrait-primary","background_color":"#0f172a","theme_color":"#0f172a","icons":[{"src":"data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 180 180%27%3E%3Crect width=%27180%27 height=%27180%27 rx=%2740%27 fill=%27%230f172a%27/%3E%3Cpath d=%27M38 90h26l14-34 24 68 16-46 12 12h12%27 fill=%27none%27 stroke=%27%2310b981%27 stroke-width=%2710%27 stroke-linecap=%27round%27 stroke-linejoin=%27round%27/%3E%3C/svg%3E","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}]}' />
+
+  <style>
+    :root {
+      --bg-base: #0b1329;
+      --bg-header: #0f172a;
+      --bg-elevated: #1e293b;
+      --bg-card: rgba(30, 41, 59, 0.72);
+      --bg-card-hover: rgba(30, 41, 59, 0.95);
+      --bg-subtle: rgba(15, 23, 42, 0.65);
+      --border-subtle: rgba(148, 163, 184, 0.12);
+      --border-highlight: rgba(148, 163, 184, 0.22);
+
+      --text-primary: #f8fafc;
+      --text-secondary: #94a3b8;
+      --text-muted: #64748b;
+
+      --up-color: #10b981;
+      --up-bg: rgba(16, 185, 129, 0.12);
+      --up-border: rgba(16, 185, 129, 0.3);
+
+      --warn-color: #f59e0b;
+      --warn-bg: rgba(245, 158, 11, 0.12);
+      --warn-border: rgba(245, 158, 11, 0.32);
+
+      --down-color: #ef4444;
+      --down-bg: rgba(239, 68, 68, 0.14);
+      --down-border: rgba(239, 68, 68, 0.36);
+
+      --accent-blue: #38bdf8;
+      --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Inter", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      --font-mono: "SF Mono", "JetBrains Mono", "Fira Code", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    html, body {
+      background-color: var(--bg-base);
+      color: var(--text-primary);
+      font-family: var(--font-sans);
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      min-height: 100vh;
+      min-height: 100dvh;
+      overscroll-behavior-y: none;
+      user-select: none;
+    }
+
+    body {
+      background-image:
+        radial-gradient(ellipse 80% 50% at 50% -15%, rgba(56, 189, 248, 0.08), transparent),
+        radial-gradient(ellipse 60% 40% at 90% 10%, rgba(16, 185, 129, 0.05), transparent);
+      padding-top: 0;
+      padding-bottom: max(2rem, env(safe-area-inset-bottom));
+      padding-left: 0;
+      padding-right: 0;
+    }
+
+    /* Top Polling Strip */
+    .poll-strip-container {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 4px;
+      background: rgba(15, 23, 42, 0.9);
+      z-index: 60;
+      overflow: hidden;
+    }
+
+    .poll-strip-bar {
+      height: 100%;
+      background: linear-gradient(90deg, #38bdf8, #10b981, #38bdf8);
+      width: 100%;
+      transition: width 1s linear;
+    }
+
+    /* Fixed 1px iOS Status Bar Color Sampler Element */
+    .ios-status-bar-sampler {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 1px;
+      background-color: #0f172a;
+      z-index: 9999;
+      pointer-events: none;
+    }
+
+    /* Solid Opaque Sticky Header */
+    .app-header {
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      background-color: #0f172a;
+      border-bottom: 1px solid rgba(148, 163, 184, 0.15);
+      padding-top: max(0.75rem, env(safe-area-inset-top));
+      padding-bottom: 0.75rem;
+      padding-left: max(1rem, env(safe-area-inset-left));
+      padding-right: max(1rem, env(safe-area-inset-right));
+      box-shadow: 0 10px 25px -5px rgba(2, 6, 23, 0.5);
+    }
+
+    .header-content {
+      max-width: 1024px;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+
+    .header-top-row {
+      display: flex;
+      align-items: center;
+      justify-content: flex-start;
+      gap: 0.75rem;
+    }
+
+    .header-brand {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      min-width: 0;
+      flex: 1;
+    }
+
+    .brand-logo {
+      position: relative;
+      width: 2.5rem;
+      height: 2.5rem;
+      border-radius: 1rem;
+      background: #0f172a;
+      border: 1px solid rgba(148, 163, 184, 0.25);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--accent-blue);
+      flex-shrink: 0;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    }
+
+    .brand-live-dot {
+      position: absolute;
+      top: -2px;
+      right: -2px;
+      width: 10px;
+      height: 10px;
+      border-radius: 9999px;
+      background-color: #10b981;
+      border: 2px solid #0f172a;
+    }
+
+    .brand-info {
+      min-width: 0;
+    }
+
+    .brand-title-wrap {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .brand-title {
+      font-size: 1.05rem;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      color: #ffffff;
+      white-space: nowrap;
+    }
+
+    .live-api-badge {
+      font-family: var(--font-mono);
+      font-size: 0.68rem;
+      font-weight: 600;
+      padding: 0.15rem 0.5rem;
+      border-radius: 9999px;
+      background: rgba(16, 185, 129, 0.15);
+      color: #6ee7b7;
+      border: 1px solid rgba(16, 185, 129, 0.3);
+      white-space: nowrap;
+    }
+
+    .brand-url {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      font-family: var(--font-mono);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      margin-top: 0.1rem;
+    }
+
+    /* Controls Row: Placed underneath Brand & URL, exactly like R-Team */
+    .header-controls-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+    }
+
+    .telemetry-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      background: rgba(15, 23, 42, 0.95);
+      border: 1px solid rgba(148, 163, 184, 0.18);
+      border-radius: 0.75rem;
+      padding: 0.35rem 0.75rem;
+      font-size: 0.75rem;
+      color: var(--text-secondary);
+      font-family: var(--font-mono);
+      white-space: nowrap;
+    }
+
+    .telemetry-pill .divider {
+      color: #334155;
+    }
+
+    .telemetry-pill .poll-count {
+      color: var(--accent-blue);
+      font-weight: 600;
+      min-width: 24px;
+      text-align: right;
+    }
+
+    .header-refresh-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 2.75rem;
+      height: 2.75rem;
+      min-width: 44px;
+      min-height: 44px;
+      border-radius: 0.75rem;
+      background: rgba(30, 41, 59, 0.9);
+      border: 1px solid rgba(148, 163, 184, 0.2);
+      color: var(--accent-blue);
+      cursor: pointer;
+      transition: background 0.15s ease, transform 0.1s ease;
+      flex-shrink: 0;
+    }
+
+    .header-refresh-btn:hover {
+      background: rgba(51, 65, 85, 0.9);
+    }
+
+    .header-refresh-btn:active {
+      transform: scale(0.94);
+    }
+
+    .header-refresh-btn svg.spin {
+      animation: rotate360 0.65s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+    }
+
+    /* Sub-bar: Navigation / Tab / Scope Info */
+    .header-sub-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
+      row-gap: 0.45rem;
+      flex-wrap: wrap;
+      min-width: 0;
+      padding-top: 0.5rem;
+      border-top: 1px solid rgba(148, 163, 184, 0.1);
+      font-size: 0.75rem;
+    }
+
+    .nav-tabs {
+      display: inline-flex;
+      padding: 0.2rem;
+      border-radius: 0.75rem;
+      background: rgba(15, 23, 42, 0.9);
+      border: 1px solid rgba(148, 163, 184, 0.15);
+      gap: 0.25rem;
+    }
+
+    .nav-tab-btn {
+      padding: 0.45rem 0.9rem;
+      min-height: 38px;
+      border-radius: 0.5rem;
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: var(--text-primary);
+      background: rgba(30, 41, 59, 0.9);
+      border: 1px solid rgba(148, 163, 184, 0.2);
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      white-space: nowrap;
+      cursor: pointer;
+      font-family: inherit;
+    }
+
+    .nav-tab-btn.active {
+      background: rgba(16, 185, 129, 0.16);
+      border-color: rgba(16, 185, 129, 0.45);
+      box-shadow: 0 0 0 1px rgba(16, 185, 129, 0.2);
+    }
+
+    .view-hidden { display: none !important; }
+
+    /* ---------- History (Archive) tab ---------- */
+    .history-kpi-row {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+      gap: 0.6rem;
+      margin-bottom: 0.9rem;
+    }
+
+    .history-kpi {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: 0.75rem;
+      padding: 0.7rem 0.8rem;
+    }
+
+    .history-kpi .kpi-label {
+      font-size: 0.65rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      font-family: var(--font-mono);
+    }
+
+    .history-kpi .kpi-value {
+      font-size: 1.35rem;
+      font-weight: 700;
+      font-family: var(--font-mono);
+      margin-top: 0.15rem;
+    }
+
+    .history-kpi .kpi-sub {
+      font-size: 0.58rem;
+      font-family: var(--font-mono);
+      color: var(--text-muted);
+      margin-top: 0.15rem;
+      min-height: 0.75rem;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    /* "2 + 3": red = real outages, amber = the ones you marked intentional. */
+    .history-kpi .num-real {
+      color: var(--down-color);
+    }
+
+    .history-kpi .num-intent {
+      color: var(--warn-color);
+    }
+
+    .history-kpi .num-sep {
+      color: var(--text-muted);
+      font-weight: 600;
+      margin: 0 0.22rem;
+    }
+
+    .history-toolbar {
+      display: flex;
+      gap: 0.5rem;
+      align-items: center;
+      margin-bottom: 0.75rem;
+      flex-wrap: wrap;
+    }
+
+    .history-search {
+      flex: 1 1 180px;
+      min-height: 44px;
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: 0.6rem;
+      color: var(--text-primary);
+      padding: 0 0.75rem;
+      font-family: inherit;
+      font-size: 0.85rem;
+    }
+
+    .history-reload {
+      min-height: 44px;
+      padding: 0 1rem;
+      border-radius: 0.6rem;
+      background: rgba(30, 41, 59, 0.9);
+      border: 1px solid rgba(148, 163, 184, 0.25);
+      color: var(--text-primary);
+      font-family: inherit;
+      font-size: 0.8rem;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .history-table-wrap {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: 0.75rem;
+      overflow-x: auto;
+    }
+
+    .history-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.8rem;
+    }
+
+    .history-table th {
+      text-align: left;
+      padding: 0.6rem 0.7rem;
+      font-size: 0.65rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--text-muted);
+      font-family: var(--font-mono);
+      border-bottom: 1px solid var(--border-subtle);
+      white-space: nowrap;
+    }
+
+    .history-table td {
+      padding: 0.6rem 0.7rem;
+      border-bottom: 1px solid rgba(148, 163, 184, 0.08);
+      vertical-align: top;
+    }
+
+    .history-table tr:last-child td { border-bottom: none; }
+
+    .inc-ongoing { color: #fca5a5; font-weight: 700; }
+    .inc-closed { color: var(--text-muted); }
+
+    .stamp-intended {
+      font-family: var(--font-mono);
+      font-size: 0.6rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: #7dd3fc;
+      border: 1px solid rgba(56, 189, 248, 0.4);
+      background: rgba(56, 189, 248, 0.12);
+      border-radius: 0.3rem;
+      padding: 0.05rem 0.3rem;
+      margin-left: 0.3rem;
+    }
+
+    .uptime-bar {
+      position: relative;
+      height: 8px;
+      border-radius: 999px;
+      background: rgba(148, 163, 184, 0.18);
+      overflow: hidden;
+      min-width: 80px;
+    }
+
+    .uptime-bar > span {
+      position: absolute;
+      inset: 0 auto 0 0;
+      background: #10b981;
+      border-radius: 999px;
+    }
+
+    .uptime-bar.warn > span { background: #f59e0b; }
+    .uptime-bar.bad > span { background: #ef4444; }
+
+    .history-empty {
+      padding: 2rem 1rem;
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 0.85rem;
+    }
+
+    .history-section-title {
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      font-family: var(--font-mono);
+      margin: 1.2rem 0 0.5rem;
+    }
+
+    .tab-badge {
+      font-family: var(--font-mono);
+      font-size: 0.65rem;
+      padding: 0.1rem 0.4rem;
+      border-radius: 0.35rem;
+      background: rgba(16, 185, 129, 0.2);
+      color: #6ee7b7;
+      border: 1px solid rgba(16, 185, 129, 0.3);
+    }
+
+    .header-sub-meta {
+      font-family: var(--font-mono);
+      font-size: 0.7rem;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    .container {
+      max-width: 1024px;
+      margin: 0 auto;
+      padding: 1.25rem 1rem 2rem 1rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1.25rem;
+    }
+
+    /* The live view is a wrapper inside .container, so it has to reproduce the
+       container's own vertical rhythm — otherwise the overview banner sits flush
+       against the Devices section with no gap. */
+    #view-live {
+      display: flex;
+      flex-direction: column;
+      gap: 1.25rem;
+      min-width: 0;
+    }
+
+    .refresh-btn {
+      position: relative;
+      width: 2.35rem;
+      height: 2.35rem;
+      border-radius: 0.65rem;
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      color: var(--text-primary);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: background 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
+    }
+
+    .refresh-btn:hover {
+      background: var(--bg-card-hover);
+      border-color: var(--border-highlight);
+    }
+
+    .refresh-btn:active {
+      transform: scale(0.94);
+    }
+
+    .refresh-btn svg.spin {
+      animation: rotate360 0.75s cubic-bezier(0.4, 0.2, 0.2, 1) infinite;
+    }
+
+    .countdown-ring {
+      position: absolute;
+      inset: -1px;
+      width: calc(100% + 2px);
+      height: calc(100% + 2px);
+      pointer-events: none;
+      transform: rotate(-90deg);
+    }
+
+    .countdown-ring circle {
+      fill: none;
+      stroke: var(--accent-blue);
+      stroke-width: 1.5;
+      stroke-linecap: round;
+      opacity: 0.35;
+      transition: stroke-dashoffset 0.95s linear;
+    }
+
+    @keyframes rotate360 {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+
+    /* Top Overview Banner */
+    .overview-banner {
+      position: relative;
+      overflow: hidden;
+      border-radius: 1rem;
+      padding: 1rem 1.15rem;
+      background: #1e293b;
+      border: 1px solid var(--border-subtle);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+      transition: border-color 0.25s ease, background 0.25s ease;
+    }
+
+    .overview-banner.state-up {
+      border-color: var(--up-border);
+      background: linear-gradient(135deg, rgba(16, 185, 129, 0.14) 0%, #1e293b 70%);
+    }
+
+    .overview-banner.state-degraded {
+      border-color: var(--warn-border);
+      background: linear-gradient(135deg, rgba(245, 158, 11, 0.16) 0%, #1e293b 70%);
+    }
+
+    .overview-banner.state-down {
+      border-color: var(--down-border);
+      background: linear-gradient(135deg, rgba(239, 68, 68, 0.18) 0%, #1e293b 70%);
+    }
+
+    .banner-left {
+      display: flex;
+      align-items: center;
+      gap: 0.85rem;
+      min-width: 0;
+      flex: 1;
+    }
+
+    .banner-headline {
+      font-size: 0.95rem;
+      font-weight: 700;
+      letter-spacing: -0.015em;
+      color: var(--text-primary);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .banner-sub {
+      font-size: 0.72rem;
+      color: var(--text-secondary);
+      margin-top: 0.15rem;
+      white-space: nowrap;
+    }
+
+    .banner-counts {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      flex-shrink: 0;
+      white-space: nowrap;
+    }
+
+    .banner-orb {
+      position: relative;
+      width: 2.5rem;
+      height: 2.5rem;
+      border-radius: 999px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    .state-up .banner-orb {
+      background: var(--up-bg);
+      color: var(--up-color);
+      box-shadow: 0 0 0 1px var(--up-border);
+    }
+
+    .state-degraded .banner-orb {
+      background: var(--warn-bg);
+      color: var(--warn-color);
+      box-shadow: 0 0 0 1px var(--warn-border);
+    }
+
+    .state-down .banner-orb {
+      background: var(--down-bg);
+      color: var(--down-color);
+      box-shadow: 0 0 0 1px var(--down-border);
+    }
+
+    .orb-pulse {
+      position: absolute;
+      inset: 0;
+      border-radius: 999px;
+      animation: pulseHalo 2.4s ease-out infinite;
+    }
+
+    .state-up .orb-pulse { border: 1.5px solid var(--up-color); }
+    .state-degraded .orb-pulse { border: 1.5px solid var(--warn-color); }
+    .state-down .orb-pulse { border: 1.5px solid var(--down-color); }
+
+    @keyframes pulseHalo {
+      0% { transform: scale(1); opacity: 0.65; }
+      75%, 100% { transform: scale(1.45); opacity: 0; }
+    }
+
+    .banner-headline {
+      font-size: 1.05rem;
+      font-weight: 700;
+      letter-spacing: -0.015em;
+      color: var(--text-primary);
+    }
+
+    .banner-sub {
+      font-size: 0.78rem;
+      color: var(--text-secondary);
+      margin-top: 0.15rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+    }
+
+    .banner-counts {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+    }
+
+    .summary-chip {
+      font-family: var(--font-mono);
+      font-size: 0.62rem;
+      font-weight: 600;
+      padding: 0.16rem 0.42rem;
+      border-radius: 0.4rem;
+      border: 1px solid var(--border-subtle);
+      background: var(--bg-subtle);
+      display: inline-flex;
+      align-items: center;
+      gap: 0.3rem;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    .summary-chip.chip-up { color: var(--up-color); border-color: var(--up-border); }
+    .summary-chip.chip-warn { color: var(--warn-color); border-color: var(--warn-border); }
+    .summary-chip.chip-down { color: var(--down-color); border-color: var(--down-border); }
+
+    /* Phones: stack banner vertically so count chips never sit on the timestamp */
+    @media (max-width: 640px) {
+      /* Tabs take the full row; PORT 443 / PWA READY drop to their own line below
+         them instead of forcing a horizontal scroll on a 390 pt viewport. */
+      .nav-tabs {
+        width: 100%;
+      }
+      .nav-tab-btn {
+        flex: 1 1 auto;
+        justify-content: center;
+        min-width: 0;
+      }
+      .tab-badge {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .header-sub-meta {
+        width: 100%;
+        justify-content: flex-start;
+      }
+      .overview-banner {
+        flex-direction: column;
+        align-items: stretch;
+      }
+      .banner-left {
+        width: 100%;
+      }
+      .banner-sub {
+        white-space: normal;
+      }
+      .banner-counts {
+        justify-content: flex-start;
+      }
+    }
+
+    /* Offline / Fetch Error Alert (Pinned in Header) */
+    .connection-alert {
+      display: none;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      padding: 0.55rem 0.85rem;
+      border-radius: 0.65rem;
+      background: rgba(245, 158, 11, 0.18);
+      border: 1px solid rgba(245, 158, 11, 0.45);
+      color: #fde68a;
+      font-size: 0.75rem;
+      margin-bottom: 0.35rem;
+    }
+
+    .connection-alert.visible {
+      display: flex;
+    }
+
+    .offline-pulse-dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 9999px;
+      background-color: #f59e0b;
+      box-shadow: 0 0 8px #f59e0b;
+      flex-shrink: 0;
+    }
+
+    .offline-pill {
+      font-family: var(--font-mono);
+      font-size: 0.65rem;
+      font-weight: 700;
+      padding: 0.15rem 0.45rem;
+      border-radius: 0.35rem;
+      background: rgba(245, 158, 11, 0.2);
+      color: #fde68a;
+      border: 1px solid rgba(245, 158, 11, 0.35);
+      flex-shrink: 0;
+      white-space: nowrap;
+    }
+
+    .stale-badge {
+      font-family: var(--font-mono);
+      font-size: 0.62rem;
+      font-weight: 600;
+      padding: 0.12rem 0.4rem;
+      border-radius: 0.35rem;
+      background: rgba(245, 158, 11, 0.15);
+      color: #fde68a;
+      border: 1px solid rgba(245, 158, 11, 0.3);
+      white-space: nowrap;
+    }
+
+    .intended-badge {
+      font-family: var(--font-mono);
+      font-size: 0.62rem;
+      font-weight: 600;
+      padding: 0.12rem 0.4rem;
+      border-radius: 0.35rem;
+      background: rgba(56, 189, 248, 0.14);
+      color: #7dd3fc;
+      border: 1px solid rgba(56, 189, 248, 0.4);
+      white-space: nowrap;
+      letter-spacing: 0.03em;
+    }
+
+    /* Domain Sections */
+    .groups-wrapper {
+      display: flex;
+      flex-direction: column;
+      gap: 1.35rem;
+    }
+
+    .domain-group {
+      display: flex;
+      flex-direction: column;
+      gap: 0.65rem;
+    }
+
+    .group-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 0.2rem;
+    }
+
+    .group-title-wrap {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .group-icon {
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+    }
+
+    .group-title {
+      font-size: 0.78rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      color: var(--text-secondary);
+    }
+
+    /* A group with something down in it carries the state on its own label:
+       the whole section reads as broken from the roll-down, without expanding it. */
+    .group-header.group-down .group-title {
+      color: var(--down-color);
+    }
+
+    .group-header.group-down .group-count {
+      color: var(--down-color);
+      border-color: rgba(239, 68, 68, 0.45);
+      background: rgba(239, 68, 68, 0.12);
+    }
+
+    .category-title.cat-down {
+      color: var(--down-color);
+    }
+
+    .category-count.cat-down {
+      color: var(--down-color);
+      border-color: rgba(239, 68, 68, 0.45);
+    }
+
+    /* Every outage in the group is silenced (Ignored): the heading goes amber, not
+       red. A section you deliberately ignored should stop shouting, without
+       pretending it is healthy. */
+    .group-header.group-muted .group-title {
+      color: var(--warn-color);
+    }
+
+    .group-header.group-muted .group-count {
+      color: var(--warn-color);
+      border-color: rgba(245, 158, 11, 0.4);
+      background: rgba(245, 158, 11, 0.12);
+    }
+
+    .category-title.cat-muted {
+      color: var(--warn-color);
+    }
+
+    .category-count.cat-muted {
+      color: var(--warn-color);
+      border-color: rgba(245, 158, 11, 0.4);
+    }
+
+    .group-count {
+      font-family: var(--font-mono);
+      font-size: 0.7rem;
+      color: var(--text-muted);
+      background: rgba(30, 41, 59, 0.65);
+      border: 1px solid var(--border-subtle);
+      padding: 0.1rem 0.45rem;
+      border-radius: 999px;
+    }
+
+    /* Collapsible Domain Groups */
+    .group-details {
+      display: flex;
+      flex-direction: column;
+      gap: 0.65rem;
+    }
+
+    .group-details > summary {
+      list-style: none;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .group-details > summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .group-details > summary .group-header {
+      padding: 0.6rem 0.4rem;
+      min-height: 44px;
+      box-sizing: border-box;
+      border-radius: 0.5rem;
+    }
+
+    .group-details > summary:active .group-header {
+      background: rgba(30, 41, 59, 0.5);
+    }
+
+    .group-caret {
+      display: inline-flex;
+      color: var(--text-muted);
+      transition: transform 0.18s ease;
+    }
+
+    .group-details:not([open]) .group-caret {
+      transform: rotate(-90deg);
+    }
+
+    /* Service Cards Grid */
+    .cards-grid {
+      display: grid;
+      grid-template-columns: repeat(1, minmax(0, 1fr));
+      gap: 0.75rem;
+    }
+
+    @media (min-width: 640px) {
+      .cards-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+
+    @media (min-width: 960px) {
+      .cards-grid.cols-3 {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+    }
+
+    .service-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: 0.875rem;
+      padding: 0.95rem 1.05rem;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      gap: 0.85rem;
+      transition: transform 0.15s ease, border-color 0.2s ease, background 0.2s ease;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .service-card:hover {
+      background: var(--bg-card-hover);
+      border-color: var(--border-highlight);
+    }
+
+    .service-card.card-down {
+      border-color: rgba(239, 68, 68, 0.85);
+      background: linear-gradient(180deg, rgba(239, 68, 68, 0.10), var(--bg-card));
+      box-shadow: inset 3px 0 0 0 #ef4444, 0 0 16px rgba(239, 68, 68, 0.16);
+    }
+
+    .service-card.card-degraded {
+      border-color: var(--warn-border);
+      background: linear-gradient(180deg, rgba(245, 158, 11, 0.08), var(--bg-card));
+    }
+
+    .service-card.card-stale {
+      opacity: 0.85;
+      filter: saturate(0.8);
+      border-color: rgba(245, 158, 11, 0.25);
+    }
+
+    .card-top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 0.65rem;
+    }
+
+    .service-identity {
+      min-width: 0;
+    }
+
+    .service-name {
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: var(--text-primary);
+      letter-spacing: -0.01em;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    /* The name is the fastest thing to read, so colour it with the state:
+       red when down, amber when degraded, amber when the down card is ignored.
+       Order matters: card-ignored wins over card-down for a silenced outage. */
+    .service-card.card-down .service-name {
+      color: var(--down-color);
+    }
+
+    .service-card.card-degraded .service-name {
+      color: var(--warn-color);
+    }
+
+    .service-card.card-ignored .service-name {
+      color: var(--warn-color);
+    }
+
+    .service-id {
+      font-family: var(--font-mono);
+      font-size: 0.68rem;
+      color: var(--text-muted);
+      margin-top: 0.12rem;
+    }
+
+    /* Status Pill */
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      font-family: var(--font-mono);
+      font-size: 0.68rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      padding: 0.22rem 0.55rem;
+      border-radius: 999px;
+      text-transform: uppercase;
+      flex-shrink: 0;
+    }
+
+    .status-pill .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 999px;
+    }
+
+    .pill-up {
+      background: var(--up-bg);
+      color: var(--up-color);
+      border: 1px solid var(--up-border);
+    }
+    .pill-up .dot {
+      background: var(--up-color);
+      box-shadow: 0 0 6px var(--up-color);
+    }
+
+    .pill-degraded {
+      background: var(--warn-bg);
+      color: var(--warn-color);
+      border: 1px solid var(--warn-border);
+    }
+    .pill-degraded .dot {
+      background: var(--warn-color);
+      box-shadow: 0 0 6px var(--warn-color);
+    }
+
+    .pill-down {
+      background: var(--down-bg);
+      color: var(--down-color);
+      border: 1px solid var(--down-border);
+    }
+    .pill-down .dot {
+      background: var(--down-color);
+      box-shadow: 0 0 6px var(--down-color);
+    }
+
+    /* Card Bottom: Detail, Latency & Sparkline */
+    .card-bottom {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      padding-top: 0.65rem;
+      border-top: 1px solid rgba(148, 163, 184, 0.08);
+    }
+
+    .service-metrics {
+      display: flex;
+      align-items: center;
+      gap: 0.45rem;
+      min-width: 0;
+      flex-wrap: wrap;
+    }
+
+    .detail-badge {
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      color: var(--text-secondary);
+      background: var(--bg-subtle);
+      border: 1px solid rgba(148, 163, 184, 0.1);
+      padding: 0.18rem 0.48rem;
+      border-radius: 0.375rem;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 210px;
+    }
+
+    .latency-badge {
+      font-family: var(--font-mono);
+      font-size: 0.7rem;
+      font-weight: 500;
+      color: var(--text-muted);
+      display: inline-flex;
+      align-items: center;
+      gap: 0.22rem;
+    }
+
+    .latency-badge.fast { color: #34d399; }
+    .latency-badge.medium { color: #fbbf24; }
+    .latency-badge.slow { color: #f87171; }
+
+    .port-badge {
+      font-family: var(--font-mono);
+      font-size: 0.66rem;
+      color: var(--accent-blue);
+      background: rgba(56, 189, 248, 0.08);
+      border: 1px solid rgba(56, 189, 248, 0.22);
+      padding: 0.14rem 0.4rem;
+      border-radius: 0.35rem;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    /* Uptime Sparkline / Dots */
+    .sparkline-wrap {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      flex-shrink: 0;
+    }
+
+    .sparkline-bars {
+      display: inline-flex;
+      align-items: flex-end;
+      gap: 3px;
+      height: 16px;
+      padding: 1px 0;
+    }
+
+    .spark-bar {
+      width: 4px;
+      border-radius: 2px;
+      transition: height 0.2s ease, background-color 0.2s ease;
+    }
+
+    .spark-bar.bar-up {
+      height: 14px;
+      background-color: var(--up-color);
+      opacity: 0.85;
+    }
+
+    .spark-bar.bar-degraded {
+      height: 10px;
+      background-color: var(--warn-color);
+      opacity: 0.9;
+    }
+
+    .spark-bar.bar-down {
+      height: 6px;
+      background-color: var(--down-color);
+      opacity: 0.95;
+    }
+
+    .spark-bar:last-child {
+      opacity: 1;
+      box-shadow: 0 0 4px currentColor;
+    }
+
+    /* Expandable Children (e.g. Docker containers) */
+    .card-children {
+      border-top: 1px solid rgba(148, 163, 184, 0.08);
+      padding-top: 0.55rem;
+    }
+
+    .card-children summary {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      font-family: var(--font-mono);
+      font-size: 0.7rem;
+      color: var(--text-muted);
+      cursor: pointer;
+      list-style: none;
+      user-select: none;
+    }
+
+    .card-children summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .card-children summary .caret {
+      display: inline-flex;
+      transition: transform 0.18s ease;
+    }
+
+    .card-children[open] summary .caret {
+      transform: rotate(90deg);
+    }
+
+    .children-list {
+      margin-top: 0.5rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.3rem;
+    }
+
+    .child-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.6rem;
+      padding: 0.32rem 0.55rem;
+      border-radius: 0.45rem;
+      background: var(--bg-subtle);
+      border: 1px solid rgba(148, 163, 184, 0.1);
+    }
+
+    .child-name {
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      color: var(--text-primary);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .child-status {
+      font-family: var(--font-mono);
+      font-size: 0.66rem;
+      font-weight: 600;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    .child-status.child-up { color: var(--up-color); }
+    .child-status.child-down { color: var(--down-color); }
+
+    /* Service control buttons (Terraria start/stop) */
+    .card-controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 10px;
+      flex-wrap: wrap;
+    }
+    .ctl-btn {
+      font-family: var(--font-mono);
+      font-size: 0.66rem;
+      font-weight: 600;
+      padding: 0.3rem 0.72rem;
+      border-radius: 8px;
+      border: 1px solid var(--border-highlight);
+      background: rgba(100, 116, 139, 0.15);
+      color: var(--text-secondary);
+      cursor: pointer;
+      transition: background 0.15s ease, color 0.15s ease;
+    }
+    .ctl-btn:hover { color: var(--text-primary); background: rgba(100, 116, 139, 0.28); }
+    .ctl-btn:disabled { opacity: 0.55; cursor: default; }
+    .ctl-start {
+      border-color: var(--up-border);
+      background: var(--up-bg);
+      color: var(--up-color);
+    }
+    .ctl-stop {
+      border-color: var(--down-border);
+      background: var(--down-bg);
+      color: var(--down-color);
+    }
+    .ctl-stop.armed {
+      background: var(--down-color);
+      border-color: var(--down-color);
+      color: #fff;
+    }
+    .ctl-msg {
+      font-family: var(--font-mono);
+      font-size: 0.6rem;
+      color: var(--text-muted);
+    }
+    /* Category Sections (Mac / Linux Server) */
+    .device-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+    .device-card { padding: 14px 16px; }
+    .device-metrics {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px 14px;
+      margin-top: 12px;
+    }
+    .device-metric { display: flex; flex-direction: column; gap: 4px; }
+    .dm-label {
+      font-size: 10px;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+    }
+    .dm-value {
+      font-family: var(--font-mono);
+      font-size: 18px;
+      font-weight: 600;
+      color: var(--text-primary);
+      line-height: 1.1;
+    }
+    .dm-sub {
+      font-size: 10px;
+      color: var(--text-muted);
+      font-family: var(--font-mono);
+    }
+    .dm-bar {
+      display: block;
+      height: 4px;
+      border-radius: 99px;
+      background: var(--bg-subtle);
+      overflow: hidden;
+    }
+    .dm-bar > span {
+      display: block;
+      height: 100%;
+      border-radius: 99px;
+      background: var(--accent-blue);
+      transition: width .4s ease;
+    }
+    .dm-bar > span.dm-ok { background: var(--up-color); }
+    .dm-bar > span.dm-warm { background: var(--warn-color); }
+    .dm-bar > span.dm-hot { background: var(--down-color); }
+    .category-section {
+      display: flex;
+      flex-direction: column;
+      gap: 0.85rem;
+      padding: 0.85rem 0.85rem 1rem 0.85rem;
+      border-radius: 1rem;
+      background: rgba(15, 23, 42, 0.45);
+      border: 1px solid var(--border-subtle);
+    }
+
+    .category-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 0.25rem;
+    }
+
+    .category-title {
+      font-size: 0.85rem;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.09em;
+      color: var(--text-primary);
+    }
+
+    .category-count {
+      font-family: var(--font-mono);
+      font-size: 0.68rem;
+      color: var(--text-muted);
+      background: rgba(30, 41, 59, 0.65);
+      border: 1px solid var(--border-subtle);
+      padding: 0.12rem 0.5rem;
+      border-radius: 999px;
+      white-space: nowrap;
+    }
+
+    /* Card actions: ignore button + status pill */
+    .card-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.45rem;
+      flex-shrink: 0;
+    }
+
+    .ignore-btn {
+      font-family: var(--font-mono);
+      font-size: 0.64rem;
+      font-weight: 600;
+      padding: 0.22rem 0.55rem;
+      border-radius: 999px;
+      background: rgba(100, 116, 139, 0.15);
+      color: var(--text-secondary);
+      border: 1px solid rgba(148, 163, 184, 0.25);
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background 0.15s ease, color 0.15s ease;
+    }
+
+    .ignore-btn:hover {
+      background: rgba(100, 116, 139, 0.3);
+      color: var(--text-primary);
+    }
+
+    .ignore-btn.ignored {
+      background: rgba(245, 158, 11, 0.15);
+      color: var(--warn-color);
+      border-color: var(--warn-border);
+    }
+
+    .ignore-btn.intended {
+      background: rgba(56, 189, 248, 0.14);
+      color: #7dd3fc;
+      border-color: rgba(56, 189, 248, 0.4);
+    }
+
+    .service-card.card-ignored {
+      opacity: 0.8;
+      border-style: dashed;
+      border-color: rgba(245, 158, 11, 0.6);
+      background: linear-gradient(180deg, rgba(245, 158, 11, 0.07), var(--bg-card));
+      box-shadow: inset 3px 0 0 0 rgba(245, 158, 11, 0.85);
+    }
+
+    .summary-chip.chip-ignored {
+      color: var(--warn-color);
+      border-color: rgba(245, 158, 11, 0.4);
+      background: rgba(245, 158, 11, 0.12);
+    }
+
+    /* Footer */
+    .footer {
+      margin-top: 0.5rem;
+      padding-top: 0.75rem;
+      border-top: 1px solid var(--border-subtle);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      font-family: var(--font-mono);
+    }
+
+    .pwa-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+    }
+  </style>
+</head>
+<body>
+  <!-- 1px Real DOM element for iOS Status Bar Color Sampler -->
+  <div class="ios-status-bar-sampler"></div>
+
+  <!-- Top Polling Strip (Matches R-Team) -->
+  <div class="poll-strip-container">
+    <div id="poll-progress-bar" class="poll-strip-bar"></div>
+  </div>
+
+  <!-- Solid Opaque Sticky Header - NO translucent blur over status bar -->
+  <header class="app-header">
+    <div class="header-content">
+      <!-- Connection Warning Banner (Pinned at top of header, always visible) -->
+      <div id="connection-alert" class="connection-alert" role="alert">
+        <div style="display: flex; align-items: center; gap: 0.6rem; min-width: 0;">
+          <span class="offline-pulse-dot" aria-hidden="true"></span>
+          <span id="connection-alert-text" style="font-family: var(--font-mono); font-size: 0.74rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Offline • Displaying cached snapshot. Reconnecting...</span>
+        </div>
+        <span class="offline-pill">CACHED</span>
+      </div>
+
+      <!-- Row 1: Brand & URL -->
+      <div class="header-top-row">
+        <div class="header-brand">
+          <div class="brand-logo" aria-hidden="true">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+            </svg>
+            <span class="brand-live-dot"></span>
+          </div>
+          <div class="brand-info">
+            <div class="brand-title-wrap">
+              <h1 class="brand-title">Status Hub</h1>
+              <span class="live-api-badge">LIVE API</span>
+            </div>
+            <div class="brand-url">https://192.0.2.190/status/</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Row 2: Timer Capsule & Refresh Button (Underneath Brand & Address) -->
+      <div class="header-controls-row">
+        <div class="telemetry-pill">
+          <span id="last-updated-text">Syncing...</span>
+          <span class="divider">|</span>
+          <span>Next: <strong id="countdown-text" class="poll-count">60s</strong></span>
+        </div>
+        <button id="refresh-btn" class="header-refresh-btn" type="button" title="Refresh status now" aria-label="Refresh status now">
+          <svg id="refresh-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path>
+            <path d="M3 3v5h5"></path>
+            <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"></path>
+            <path d="M16 16h5v5"></path>
+          </svg>
+        </button>
+      </div>
+
+      <!-- Row 3: Navigation and Scope -->
+      <div class="header-sub-row">
+        <div class="nav-tabs">
+          <button class="nav-tab-btn active" id="tab-btn-live" type="button">
+            <span>📡</span>
+            <span>Telemetry</span>
+            <span class="tab-badge" id="tab-badge-count">-- UP</span>
+          </button>
+          <button class="nav-tab-btn" id="tab-btn-history" type="button">
+            <span>🗂</span>
+            <span>History</span>
+            <span class="tab-badge" id="tab-badge-history">--</span>
+          </button>
+        </div>
+        <div class="header-sub-meta">
+          <span>PORT 443</span>
+          <span style="color: #334155;">•</span>
+          <span style="color: #10b981;">PWA READY</span>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <div class="container">
+    <section id="view-live">
+    <!-- Top Overview Banner -->
+    <section id="overview-banner" class="overview-banner state-up" aria-live="polite">
+      <div class="banner-left">
+        <div class="banner-orb">
+          <div class="orb-pulse"></div>
+          <span id="banner-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="20 6 9 17 4 12"></polyline>
+            </svg>
+          </span>
+        </div>
+        <div>
+          <h2 id="banner-headline" class="banner-headline">All 8 services operational</h2>
+          <div class="banner-sub">
+            <span id="server-timestamp">Snapshot: --</span>
+          </div>
+        </div>
+      </div>
+
+      <div id="banner-counts" class="banner-counts">
+        <!-- Populated dynamically -->
+      </div>
+    </section>
+
+    <!-- Grouped Service Cards -->
+    <main id="groups-container" class="groups-wrapper">
+      <!-- Populated dynamically -->
+    </main>
+    </section>
+
+    <!-- History tab: incident log + 30-day uptime (GET /api/history) -->
+    <section id="view-history" class="view-hidden">
+      <div class="history-kpi-row">
+        <div class="history-kpi">
+          <div class="kpi-label">Incidents · 30d</div>
+          <div class="kpi-value" id="h-kpi-incidents">--</div>
+          <div class="kpi-sub" id="h-kpi-incidents-sub"></div>
+        </div>
+        <div class="history-kpi">
+          <div class="kpi-label">Ongoing now</div>
+          <div class="kpi-value" id="h-kpi-ongoing">--</div>
+          <div class="kpi-sub" id="h-kpi-ongoing-sub"></div>
+        </div>
+        <div class="history-kpi">
+          <div class="kpi-label">Mean time to recover</div>
+          <div class="kpi-value" id="h-kpi-mttr">--</div>
+          <div class="kpi-sub" id="h-kpi-mttr-sub"></div>
+        </div>
+        <div class="history-kpi">
+          <div class="kpi-label">Worst uptime</div>
+          <div class="kpi-value" id="h-kpi-worst">--</div>
+          <div class="kpi-sub" id="h-kpi-worst-sub"></div>
+        </div>
+      </div>
+
+      <div class="history-toolbar">
+        <input id="history-search" class="history-search" type="search" placeholder="Filter by service or reason…" autocomplete="off">
+        <button id="history-reload" class="history-reload" type="button">Reload</button>
+      </div>
+      <div id="history-meta" style="font-family: var(--font-mono); font-size: 0.65rem; color: var(--text-muted); margin-bottom: 0.6rem;">—</div>
+
+      <div class="history-section-title">Incident log</div>
+      <div class="history-table-wrap">
+        <table class="history-table">
+          <thead>
+            <tr>
+              <th>Service</th>
+              <th>Down at</th>
+              <th>Back at</th>
+              <th>Duration</th>
+              <th>Last detail</th>
+            </tr>
+          </thead>
+          <tbody id="history-incident-body">
+            <tr><td colspan="5" class="history-empty">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="history-section-title">Uptime · last 30 days</div>
+      <div class="history-table-wrap">
+        <table class="history-table">
+          <thead>
+            <tr>
+              <th>Service</th>
+              <th>Group</th>
+              <th>Uptime</th>
+              <th>Checks</th>
+              <th>Failed</th>
+            </tr>
+          </thead>
+          <tbody id="history-uptime-body">
+            <tr><td colspan="5" class="history-empty">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="footer">
+      <div>ENDPOINT: GET /status/api/status &bull; INTERVAL: 30s</div>
+      <div class="pwa-badge">
+        <span id="pwa-mode-indicator">PWA READY</span>
+      </div>
+    </footer>
+  </div>
+
+  <script>
+    (function () {
+      'use strict';
+
+      const API_BASE = (window.location.pathname.replace(/\/$/, '') || '');
+      const API_ENDPOINT = API_BASE + '/api/status';
+      const POLL_ENDPOINT = API_BASE + '/api/poll';
+      const POLL_INTERVAL_SEC = 30;
+      const STORAGE_KEY = 'observerfrog_status_cache_v1';
+      const HISTORY_STORAGE_KEY = 'observerfrog_rolling_history_v1';
+      const IGNORED_STORAGE_KEY = 'observerfrog_ignored_services_v1';
+      const API_HISTORY_ENDPOINT = API_BASE + '/api/history';
+      const API_IGNORE_ENDPOINT = API_BASE + '/api/ignore';
+      const API_INTENTIONAL_ENDPOINT = API_BASE + '/api/intentional';
+      const INTENTIONAL_STORAGE_KEY = 'observerfrog_intentional_services_v1';
+      const HISTORY_CACHE_KEY = 'observerfrog_history_cache_v1';
+      const ACTIVE_TAB_KEY = 'observerfrog_active_tab_v1';
+      const MAX_HISTORY_POINTS = 7;
+
+      const CATEGORY_ORDER = ['Mac', 'Linux Server'];
+
+      const PREFERRED_GROUP_ORDER = [
+        'Core',
+        'Model Routing',
+        'Proxy',
+        'Network',
+        'Security',
+        'Hubs & Proxy',
+        'Game Streaming',
+        'Game Servers',
+        'Containers',
+        'Local LLM',
+        'Node',
+        'Monitoring',
+        'Messaging',
+        'Storage'
+      ];
+
+      // Seed fallback matching the exact contract so first paint or offline preview is immediate
+      const SEED_DATA = { timestamp: 0, services: [], history: {} };
+
+      // State
+      let currentData = loadCachedData() || SEED_DATA;
+      let rollingHistory = loadRollingHistory();
+      let collapsedGroups = loadCollapsedGroups();
+      let ignoredServices = loadIgnoredServices();
+      let intentionalServices = loadIntentionalServices();
+      let lastFetchTimeMs = null;
+      let countdownSec = POLL_INTERVAL_SEC;
+      let isFetching = false;
+      let tickTimer = null;
+
+      function loadCollapsedGroups() {
+        try {
+          const raw = localStorage.getItem('observerfrog_collapsed_groups_v1');
+          return new Set(raw ? JSON.parse(raw) : []);
+        } catch (_) {
+          return new Set();
+        }
+      }
+
+      function saveCollapsedGroups() {
+        try {
+          localStorage.setItem('observerfrog_collapsed_groups_v1', JSON.stringify([...collapsedGroups]));
+        } catch (_) {}
+      }
+
+      function loadIgnoredServices() {
+        try {
+          const raw = localStorage.getItem(IGNORED_STORAGE_KEY);
+          return new Set(raw ? JSON.parse(raw) : []);
+        } catch (_) {
+          return new Set();
+        }
+      }
+
+      function saveIgnoredServices() {
+        try {
+          localStorage.setItem(IGNORED_STORAGE_KEY, JSON.stringify([...ignoredServices]));
+        } catch (_) {}
+      }
+
+      function loadIntentionalServices() {
+        try {
+          const raw = localStorage.getItem(INTENTIONAL_STORAGE_KEY);
+          return new Set(raw ? JSON.parse(raw) : []);
+        } catch (_) {
+          return new Set();
+        }
+      }
+
+      function saveIntentionalServices() {
+        try {
+          localStorage.setItem(INTENTIONAL_STORAGE_KEY, JSON.stringify([...intentionalServices]));
+        } catch (_) {}
+      }
+
+      // Optimistic flag writes must also patch the cached snapshot, otherwise the
+      // very next renderDashboard() re-hydrates the flag set from the stale payload
+      // and silently undoes the click (the button then never changes its label).
+      function setLocalFlag(kind, serviceId, on) {
+        if (!currentData) return;
+        if (!Array.isArray(currentData[kind])) currentData[kind] = [];
+        const cur = new Set(currentData[kind]);
+        if (on) cur.add(serviceId);
+        else cur.delete(serviceId);
+        currentData[kind] = [...cur];
+      }
+
+      function toggleIntentional(serviceId) {
+        const want = !intentionalServices.has(serviceId);
+        if (want) intentionalServices.add(serviceId);
+        else intentionalServices.delete(serviceId);
+        saveIntentionalServices();
+        setLocalFlag('intentional', serviceId, want);
+        renderDashboard(currentData);
+        fetch(API_INTENTIONAL_ENDPOINT, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: serviceId, intentional: want })
+        }).then(r => r.json()).then(body => {
+          if (body && Array.isArray(body.intentional_ids)) {
+            intentionalServices = new Set(body.intentional_ids);
+            saveIntentionalServices();
+            setLocalFlag('intentional', serviceId, want);
+            if (currentData) currentData.intentional = body.intentional_ids;
+            renderDashboard(currentData);
+            if (typeof fetchHistory === 'function' && activeTab === 'history') fetchHistory(true);
+          }
+        }).catch(() => {});
+      }
+
+      function toggleIgnore(serviceId) {
+        const wantIgnored = !ignoredServices.has(serviceId);
+        // Optimistic local flip, then persist server-side: the flag lives in SQLite so
+        // every device (and the History tab) agrees on what is silenced.
+        if (wantIgnored) ignoredServices.add(serviceId);
+        else ignoredServices.delete(serviceId);
+        saveIgnoredServices();
+        setLocalFlag('ignored', serviceId, wantIgnored);
+        renderDashboard(currentData);
+        fetch(API_IGNORE_ENDPOINT, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: serviceId, ignored: wantIgnored })
+        }).then(r => r.json()).then(body => {
+          if (body && Array.isArray(body.ignored_ids)) {
+            ignoredServices = new Set(body.ignored_ids);
+            saveIgnoredServices();
+            if (currentData) currentData.ignored = body.ignored_ids;
+            renderDashboard(currentData);
+          }
+        }).catch(() => {});
+      }
+
+      // DOM Elements
+      const elBanner = document.getElementById('overview-banner');
+      const elBannerIcon = document.getElementById('banner-icon');
+      const elBannerHeadline = document.getElementById('banner-headline');
+      const elBannerCounts = document.getElementById('banner-counts');
+      const elServerTimestamp = document.getElementById('server-timestamp');
+      const elGroupsContainer = document.getElementById('groups-container');
+      const elLastUpdated = document.getElementById('last-updated-text');
+      const elCountdownText = document.getElementById('countdown-text');
+      const elCountdownCircle = document.getElementById('countdown-circle');
+      const elPollProgressBar = document.getElementById('poll-progress-bar');
+      const elRefreshBtn = document.getElementById('refresh-btn');
+      const elRefreshIcon = document.getElementById('refresh-icon');
+      const elConnectionAlert = document.getElementById('connection-alert');
+      const elConnectionAlertText = document.getElementById('connection-alert-text');
+      const elPwaMode = document.getElementById('pwa-mode-indicator');
+
+      function loadCachedData() {
+        try {
+          const raw = localStorage.getItem(STORAGE_KEY);
+          return raw ? JSON.parse(raw) : null;
+        } catch (_) {
+          return null;
+        }
+      }
+
+      function saveCachedData(data) {
+        try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+        } catch (_) {}
+      }
+
+      function loadRollingHistory() {
+        try {
+          const raw = localStorage.getItem(HISTORY_STORAGE_KEY);
+          return raw ? JSON.parse(raw) : {};
+        } catch (_) {
+          return {};
+        }
+      }
+
+      function saveRollingHistory(hist) {
+        try {
+          localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(hist));
+        } catch (_) {}
+      }
+
+      function normalizeStatus(rawStatus) {
+        const s = String(rawStatus || '').toLowerCase().trim();
+        if (s === 'up' || s === 'ok' || s === 'healthy' || s === 'online') return 'up';
+        if (s === 'down' || s === 'error' || s === 'offline' || s === 'failed') return 'down';
+        return 'degraded';
+      }
+
+      function statusToHistoryCode(status) {
+        const norm = normalizeStatus(status);
+        if (norm === 'up') return 1;
+        if (norm === 'down') return 0;
+        return 0.5;
+      }
+
+      function updateRollingHistory(data) {
+        if (!data || !Array.isArray(data.services)) return;
+        const apiHistory = data.history || {};
+
+        data.services.forEach(svc => {
+          const code = statusToHistoryCode(svc.status);
+          if (Array.isArray(apiHistory[svc.id]) && apiHistory[svc.id].length > 0) {
+            rollingHistory[svc.id] = apiHistory[svc.id].slice(-MAX_HISTORY_POINTS);
+          } else {
+            const existing = Array.isArray(rollingHistory[svc.id]) ? rollingHistory[svc.id] : [1, 1, 1, 1];
+            existing.push(code);
+            rollingHistory[svc.id] = existing.slice(-MAX_HISTORY_POINTS);
+          }
+        });
+
+        saveRollingHistory(rollingHistory);
+      }
+
+      function escapeHtml(str) {
+        return String(str ?? '')
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;');
+      }
+
+      function getGroupIconSvg(groupName) {
+        switch (groupName) {
+          case 'Core':
+            return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 12 22 7 12 2"></polygon><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>';
+          case 'Model Routing':
+            return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"></circle><circle cx="6" cy="12" r="3"></circle><circle cx="18" cy="19" r="3"></circle><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line></svg>';
+          case 'Proxy':
+            return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>';
+          case 'Network':
+            return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>';
+          default:
+            return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect><rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect></svg>';
+        }
+      }
+
+      function renderSparkline(service, historyMap) {
+        const rawSeries = (historyMap && Array.isArray(historyMap[service.id]) && historyMap[service.id].length > 0)
+          ? historyMap[service.id]
+          : (rollingHistory[service.id] || [statusToHistoryCode(service.status)]);
+
+        const barsHtml = rawSeries.map((val, idx) => {
+          let barClass = 'bar-up';
+          let label = 'UP';
+          if (val === 0 || val === 'down') {
+            barClass = 'bar-down';
+            label = 'DOWN';
+          } else if (val !== 1 && val !== 'up') {
+            barClass = 'bar-degraded';
+            label = 'DEGRADED';
+          }
+          return `<span class="spark-bar ${barClass}" title="Check #${idx + 1}: ${label}"></span>`;
+        }).join('');
+
+        return `
+          <div class="sparkline-wrap" aria-label="Recent uptime history">
+            <div class="sparkline-bars">${barsHtml}</div>
+          </div>
+        `;
+      }
+
+      function renderRam(ramMb) {
+        const mb = Number(ramMb);
+        if (!Number.isFinite(mb) || mb <= 0) return '';
+        const label = mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${Math.round(mb)} MB`;
+        return `<span class="latency-badge" title="Resident RAM (all processes of this service)">◆ ${label}</span>`;
+      }
+
+      function renderLatency(latencyMs) {
+        const ms = Number(latencyMs);
+        if (!Number.isFinite(ms) || ms <= 0) {
+          return `<span class="latency-badge" title="Local process / 0ms">0ms</span>`;
+        }
+        let speedClass = 'fast';
+        if (ms >= 100) speedClass = 'slow';
+        else if (ms >= 25) speedClass = 'medium';
+
+        return `<span class="latency-badge ${speedClass}" title="Response latency">${ms}ms</span>`;
+      }
+
+      function renderDevices(devices, isStale) {
+        if (!Array.isArray(devices) || devices.length === 0) return '';
+        const clamp = v => (typeof v === 'number' ? Math.max(0, Math.min(100, v)) : 0);
+        const barClass = v => (typeof v !== 'number' ? '' : (v >= 90 ? 'dm-hot' : (v >= 70 ? 'dm-warm' : 'dm-ok')));
+        const cpuTxt = v => (typeof v === 'number' ? v.toFixed(1) + '%' : '\u2014');
+        const ramTxt = v => (typeof v === 'number' ? v.toFixed(0) + '%' : '\u2014');
+        const tempTxt = d => {
+          if (typeof d.temp_c === 'number') return d.temp_c.toFixed(0) + '\u00b0C';
+          if (d.thermal) return d.thermal;
+          return '\u2014';
+        };
+        const uptimeTxt = h => {
+          if (typeof h !== 'number') return '\u2014';
+          if (h >= 48) return (h / 24).toFixed(1) + 'd';
+          return h.toFixed(1) + 'h';
+        };
+        const upCount = devices.filter(d => normalizeStatus(d.status) === 'up').length;
+
+        const cards = devices.map(d => {
+          const st = normalizeStatus(d.status);
+          const pillClass = st === 'up' ? 'pill-up' : (st === 'down' ? 'pill-down' : 'pill-degraded');
+          const tempHot = (typeof d.temp_c === 'number' && d.temp_c >= 80) ? ' dm-hot-text' : '';
+          return `
+            <article class="service-card device-card${isStale ? ' card-stale' : ''}" data-device-id="${escapeHtml(d.id)}">
+              <div class="card-top">
+                <div class="service-identity">
+                  <h3 class="service-name">${escapeHtml(d.name)}</h3>
+                  <div class="service-id">${escapeHtml(d.detail || d.kind || '')}</div>
+                </div>
+                <div class="card-actions">
+                  <span class="status-pill ${pillClass}"><span class="dot"></span>${st.toUpperCase()}</span>
+                </div>
+              </div>
+              <div class="device-metrics">
+                <div class="device-metric">
+                  <span class="dm-label">CPU</span>
+                  <span class="dm-value">${cpuTxt(d.cpu_pct)}</span>
+                  <span class="dm-bar"><span class="${barClass(d.cpu_pct)}" style="width:${clamp(d.cpu_pct)}%"></span></span>
+                </div>
+                <div class="device-metric">
+                  <span class="dm-label">RAM</span>
+                  <span class="dm-value">${ramTxt(d.mem_pct)}</span>
+                  <span class="dm-bar"><span class="${barClass(d.mem_pct)}" style="width:${clamp(d.mem_pct)}%"></span></span>
+                  ${d.mem_used ? `<span class="dm-sub">${escapeHtml(d.mem_used)}${d.mem_cached ? ' · ' + escapeHtml(d.mem_cached) : ''}</span>` : ''}
+                </div>
+                <div class="device-metric">
+                  <span class="dm-label">TEMP</span>
+                  <span class="dm-value${tempHot}">${escapeHtml(tempTxt(d))}</span>
+                </div>
+                <div class="device-metric">
+                  <span class="dm-label">UPTIME</span>
+                  <span class="dm-value">${uptimeTxt(d.uptime_h)}</span>
+                </div>
+              </div>
+            </article>`;
+        }).join('');
+
+        return `
+          <div class="category-section">
+            <div class="category-header">
+              <h2 class="category-title">Devices</h2>
+              <span class="category-count">${upCount}/${devices.length} UP</span>
+            </div>
+            <div class="device-grid">${cards}</div>
+          </div>
+        `;
+      }
+
+      function renderDashboard(data) {
+        if (!data || !Array.isArray(data.services)) return;
+
+        // Server is the source of truth for ignore flags; localStorage is only the offline copy.
+        if (Array.isArray(data.ignored)) {
+          const srvSet = new Set(data.ignored);
+          const same = srvSet.size === ignoredServices.size && [...srvSet].every(x => ignoredServices.has(x));
+          if (!same) {
+            ignoredServices = srvSet;
+            saveIgnoredServices();
+          }
+        }
+
+        if (Array.isArray(data.intentional)) {
+          const srvSet = new Set(data.intentional);
+          const same = srvSet.size === intentionalServices.size && [...srvSet].every(x => intentionalServices.has(x));
+          if (!same) {
+            intentionalServices = srvSet;
+            saveIntentionalServices();
+          }
+        }
+
+        const isOffline = elConnectionAlert.classList.contains('visible') || !navigator.onLine;
+        const isStale = isOffline || (lastFetchTimeMs && (Date.now() - lastFetchTimeMs > 120000));
+
+        const services = data.services;
+        const total = services.length;
+        let upCount = 0;
+        let degradedCount = 0;
+        let downCount = 0;
+        let ignoredDownCount = 0;
+
+        services.forEach(s => {
+          const st = normalizeStatus(s.status);
+          if (st === 'up') upCount++;
+          else if (st === 'down') {
+            if (ignoredServices.has(s.id)) ignoredDownCount++;
+            else downCount++;
+          }
+          else degradedCount++;
+        });
+
+        // Update Top Overview Banner
+        elBanner.classList.remove('state-up', 'state-degraded', 'state-down');
+
+        if (downCount > 0) {
+          elBanner.classList.add('state-down');
+          elBannerIcon.innerHTML = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>';
+          const parts = [];
+          if (downCount > 0) parts.push(`${downCount} service${downCount > 1 ? 's' : ''} down`);
+          if (degradedCount > 0) parts.push(`${degradedCount} degraded`);
+          elBannerHeadline.textContent = parts.join(', ');
+        } else if (degradedCount > 0) {
+          elBanner.classList.add('state-degraded');
+          elBannerIcon.innerHTML = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>';
+          elBannerHeadline.textContent = `${degradedCount} service${degradedCount > 1 ? 's' : ''} degraded (${upCount}/${total} up)`;
+        } else {
+          elBanner.classList.add('state-up');
+          elBannerIcon.innerHTML = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+          elBannerHeadline.textContent = `All ${total} services operational`;
+        }
+
+        // Format server timestamp
+        if (data.timestamp) {
+          const tsDate = new Date(data.timestamp * 1000);
+          const timeFormatted = tsDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+          elServerTimestamp.textContent = isStale ? `Cached Snapshot: ${timeFormatted}` : `Server Timestamp: ${timeFormatted}`;
+        }
+
+        // Telemetry tab badge (live count)
+        const elTabBadge = document.getElementById('tab-badge-count');
+        if (elTabBadge) elTabBadge.textContent = `${upCount}/${total} UP`;
+
+        // Summary chips
+        elBannerCounts.innerHTML = `
+          <span class="summary-chip chip-up">${upCount} UP</span>
+          ${degradedCount > 0 ? `<span class="summary-chip chip-warn">${degradedCount} DEGRADED</span>` : ''}
+          ${downCount > 0 ? `<span class="summary-chip chip-down">${downCount} DOWN</span>` : ''}
+          ${ignoredDownCount > 0 ? `<span class="summary-chip chip-ignored">${ignoredDownCount} IGNORED</span>` : ''}
+        `;
+
+        // Group services by category, then by domain group inside each category
+        const categoriesMap = new Map();
+        CATEGORY_ORDER.forEach(c => categoriesMap.set(c, new Map()));
+
+        services.forEach(svc => {
+          const cat = svc.category || 'Mac';
+          const grp = svc.group || 'Other';
+          if (!categoriesMap.has(cat)) categoriesMap.set(cat, new Map());
+          const groupsMap = categoriesMap.get(cat);
+          if (!groupsMap.has(grp)) groupsMap.set(grp, []);
+          groupsMap.get(grp).push(svc);
+        });
+
+        const orderedGroupsFor = (groupsMap) => {
+          const ordered = [];
+          PREFERRED_GROUP_ORDER.forEach(g => {
+            if (groupsMap.has(g)) { ordered.push([g, groupsMap.get(g)]); groupsMap.delete(g); }
+          });
+          for (const [g, svcs] of groupsMap.entries()) ordered.push([g, svcs]);
+          return ordered;
+        };
+
+        let groupsHtml = '';
+        for (const [catName, groupsMapRaw] of categoriesMap.entries()) {
+          const groupEntries = orderedGroupsFor(groupsMapRaw);
+          if (groupEntries.length === 0) continue;
+
+          let catInnerHtml = '';
+          for (const [groupName, groupServices] of groupEntries) {
+          if (groupServices.length === 0) continue;
+
+          const groupUp = groupServices.filter(s => normalizeStatus(s.status) === 'up').length;
+          // Heading colour follows the worst thing in the group: red if anything is
+          // down and not silenced, amber if the only outages are ones he ignored.
+          const gDownAll = groupServices.filter(s => normalizeStatus(s.status) === 'down');
+          const gDownReal = gDownAll.filter(s => !ignoredServices.has(s.id));
+          const groupTone = gDownAll.length === 0 ? '' : (gDownReal.length > 0 ? ' group-down' : ' group-muted');
+          const gridColsClass = groupServices.length === 3 ? 'cols-3' : '';
+
+          const cardsHtml = groupServices.map(svc => {
+            const st = normalizeStatus(svc.status);
+            const isIgnored = st === 'down' && ignoredServices.has(svc.id);
+            const pillClass = st === 'up' ? 'pill-up' : (st === 'down' ? 'pill-down' : 'pill-degraded');
+            const cardStateClass = (st === 'down' ? 'card-down' : (st === 'degraded' ? 'card-degraded' : '')) + (isIgnored ? ' card-ignored' : '');
+            const statusLabel = st.toUpperCase();
+            const ignoreBtnHtml = st === 'down'
+              ? `<button class="ignore-btn${isIgnored ? ' ignored' : ''}" data-ignore-id="${escapeHtml(svc.id)}" type="button">${isIgnored ? 'Unignore' : 'Ignore'}</button>`
+              : '';
+            // "Intended": meant to be off. Still alerts on transitions; only keeps
+            // the service out of uptime percentages and MTTR in the History tab.
+            // One button, labelled with the current state, so it never reads as an
+            // instruction: "Intended" (blue) / "Unintended" (plain). Click toggles.
+            const isIntended = intentionalServices.has(svc.id);
+            const intendedBtnHtml = (st === 'down' || isIntended)
+              ? `<button class="ignore-btn${isIntended ? ' intended' : ''}" data-intentional-id="${escapeHtml(svc.id)}" type="button" title="${isIntended ? 'Meant to be off: excluded from uptime stats, still alerts' : 'Counted as a real outage: included in uptime stats'}">${isIntended ? 'Intended' : 'Unintended'}</button>`
+              : '';
+
+            let childrenHtml = '';
+            if (Array.isArray(svc.children) && svc.children.length > 0) {
+              const rows = svc.children.map(c => {
+                const cst = normalizeStatus(c.status);
+                return `
+                  <div class="child-row">
+                    <span class="child-name">${escapeHtml(c.name)}</span>
+                    <span class="child-status child-${cst}">${cst === 'up' ? '●' : '○'} ${escapeHtml(c.detail || cst)}</span>
+                  </div>
+                `;
+              }).join('');
+              childrenHtml = `
+                <details class="card-children">
+                  <summary>
+                    <span class="caret">
+                      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                    </span>
+                    ${svc.children.length} sub-item${svc.children.length > 1 ? 's' : ''}
+                  </summary>
+                  <div class="children-list">${rows}</div>
+                </details>
+              `;
+            }
+
+            let ctlHtml = '';
+            if (svc.control) {
+              const upNow = st === 'up';
+              ctlHtml = `
+                <div class="card-controls">
+                  <button class="ctl-btn ${upNow ? 'ctl-stop' : 'ctl-start'}" type="button"
+                          data-control-target="${escapeHtml(svc.control)}"
+                          data-control-action="${upNow ? 'stop' : 'start'}">${upNow ? 'Stop' : 'Start'}</button>
+                  <span class="ctl-msg"></span>
+                </div>`;
+            }
+
+            const finalCardClass = `service-card ${cardStateClass}${isStale ? ' card-stale' : ''}`;
+
+            return `
+              <article class="${finalCardClass}" data-service-id="${escapeHtml(svc.id)}">
+                <div class="card-top">
+                  <div class="service-identity">
+                    <h3 class="service-name">${escapeHtml(svc.name)}</h3>
+                    <div class="service-id">${escapeHtml(svc.id)}</div>
+                  </div>
+                  <div class="card-actions">
+                    ${isStale ? '<span class="stale-badge" title="Data from cached snapshot">CACHED</span>' : ''}
+                    ${intendedBtnHtml}
+                    ${ignoreBtnHtml}
+                    <span class="status-pill ${pillClass}">
+                      <span class="dot"></span>
+                      ${statusLabel}
+                    </span>
+                  </div>
+                </div>
+
+                <div class="card-bottom">
+                  <div class="service-metrics">
+                    ${svc.ports ? `<span class="port-badge">:${escapeHtml(svc.ports)}</span>` : ''}
+                    <span class="detail-badge" title="${escapeHtml(svc.detail)}">${escapeHtml(svc.detail || 'N/A')}</span>
+                    ${renderLatency(svc.latency_ms)}
+                    ${renderRam(svc.ram_mb)}
+                  </div>
+                  ${renderSparkline(svc, data.history)}
+                </div>
+                ${childrenHtml}
+                ${ctlHtml}
+              </article>
+            `;
+          }).join('');
+
+          catInnerHtml += `
+            <section class="domain-group" aria-label="${escapeHtml(groupName)}">
+              <details class="group-details" data-group="${escapeHtml(catName)}:${escapeHtml(groupName)}"${collapsedGroups.has(catName + ':' + groupName) ? '' : ' open'}>
+                <summary>
+                  <div class="group-header${groupTone}">
+                    <div class="group-title-wrap">
+                      <span class="group-caret">
+                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                      </span>
+                      <span class="group-icon">${getGroupIconSvg(groupName)}</span>
+                      <h2 class="group-title">${escapeHtml(groupName)}</h2>
+                    </div>
+                    <span class="group-count">${groupUp}/${groupServices.length} UP</span>
+                  </div>
+                </summary>
+                <div class="cards-grid ${gridColsClass}">
+                  ${cardsHtml}
+                </div>
+              </details>
+            </section>
+          `;
+          }
+
+          const catServices = groupEntries.flatMap(([, svcs]) => svcs);
+          const catUp = catServices.filter(s => normalizeStatus(s.status) === 'up').length;
+          const cDownAll = catServices.filter(s => normalizeStatus(s.status) === 'down');
+          const cDownReal = cDownAll.filter(s => !ignoredServices.has(s.id));
+          const catTone = cDownAll.length === 0 ? '' : (cDownReal.length > 0 ? ' cat-down' : ' cat-muted');
+          groupsHtml += `
+            <div class="category-section">
+              <div class="category-header">
+                <h2 class="category-title${catTone}">${escapeHtml(catName)}</h2>
+                <span class="category-count${catTone}">${catUp}/${catServices.length} UP</span>
+              </div>
+              ${catInnerHtml}
+            </div>
+          `;
+        }
+
+        elGroupsContainer.innerHTML = renderDevices(data.devices, isStale) + groupsHtml;
+      }
+
+      function updateTimingUI() {
+        // Countdown text & top progress strip
+        if (elCountdownText) {
+          elCountdownText.textContent = `${countdownSec}s`;
+        }
+        if (elPollProgressBar) {
+          const pct = Math.max(0, Math.min(100, (countdownSec / POLL_INTERVAL_SEC) * 100));
+          elPollProgressBar.style.width = `${pct}%`;
+        }
+        if (elCountdownCircle) {
+          const circumference = 106.8;
+          const offset = circumference - (countdownSec / POLL_INTERVAL_SEC) * circumference;
+          elCountdownCircle.style.strokeDashoffset = String(Math.max(0, Math.min(circumference, offset)));
+        }
+
+        // Relative "last updated" label
+        if (!lastFetchTimeMs) {
+          elLastUpdated.textContent = 'Snapshot';
+          return;
+        }
+        const elapsedSec = Math.max(0, Math.floor((Date.now() - lastFetchTimeMs) / 1000));
+        if (elapsedSec < 2) {
+          elLastUpdated.textContent = 'Just now';
+        } else if (elapsedSec < 60) {
+          elLastUpdated.textContent = `${elapsedSec}s ago`;
+        } else {
+          const mins = Math.floor(elapsedSec / 60);
+          elLastUpdated.textContent = `${mins}m ago`;
+        }
+      }
+
+      async function fetchStatus(isManual = false) {
+        if (isFetching) return;
+        isFetching = true;
+        elRefreshIcon.classList.add('spin');
+
+        if (isManual) {
+          countdownSec = POLL_INTERVAL_SEC;
+          updateTimingUI();
+        }
+
+        try {
+          const controller = new AbortController();
+          // Fast 3.5s timeout for auto-poll so disconnects are detected rapidly
+          const timeoutId = setTimeout(() => controller.abort(), isManual ? 10000 : 3500);
+
+          const response = await fetch(isManual ? POLL_ENDPOINT : API_ENDPOINT, {
+            method: 'GET',
+            headers: { 'Accept': 'application/json' },
+            cache: 'no-store',
+            signal: controller.signal
+          });
+          clearTimeout(timeoutId);
+
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+          }
+
+          const payload = await response.json();
+          currentData = payload;
+          lastFetchTimeMs = Date.now();
+          updateRollingHistory(payload);
+          saveCachedData(payload);
+
+          elConnectionAlert.classList.remove('visible');
+          renderDashboard(currentData);
+        } catch (err) {
+          const snapTime = lastFetchTimeMs ? new Date(lastFetchTimeMs).toLocaleTimeString() : (currentData.timestamp ? new Date(currentData.timestamp * 1000).toLocaleTimeString() : 'cached');
+          elConnectionAlertText.textContent = `Offline • Showing cached snapshot (${snapTime}). Reconnecting...`;
+          elConnectionAlert.classList.add('visible');
+          renderDashboard(currentData);
+        } finally {
+          countdownSec = POLL_INTERVAL_SEC;
+          updateTimingUI();
+          setTimeout(() => {
+            elRefreshIcon.classList.remove('spin');
+            isFetching = false;
+          }, 280);
+        }
+      }
+
+      function startPollingLoop() {
+        if (tickTimer) clearInterval(tickTimer);
+        tickTimer = setInterval(() => {
+          countdownSec -= 1;
+          const isOfflineMode = elConnectionAlert.classList.contains('visible');
+          if (isOfflineMode && countdownSec > 5) {
+            countdownSec = 5;
+          }
+          // Fast check every 15s to detect dropped WireGuard/LAN without waiting a full minute
+          if (countdownSec % 15 === 0 && !isFetching) {
+            fetchStatus(false);
+          } else if (countdownSec <= 0) {
+            countdownSec = POLL_INTERVAL_SEC;
+            fetchStatus(false);
+          }
+          updateTimingUI();
+        }, 1000);
+      }
+
+      // Generate PNG Apple Touch Icon via Canvas so iOS SpringBoard renders a crisp native icon
+      function setupiOSAppIcons() {
+        try {
+          const canvas = document.createElement('canvas');
+          canvas.width = 180;
+          canvas.height = 180;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) return;
+
+          // Slate background (#0f172a)
+          ctx.fillStyle = '#0f172a';
+          ctx.fillRect(0, 0, 180, 180);
+
+          // Subtle radial glow
+          const grad = ctx.createRadialGradient(90, 90, 10, 90, 90, 80);
+          grad.addColorStop(0, 'rgba(16, 185, 129, 0.22)');
+          grad.addColorStop(1, 'rgba(15, 23, 42, 0)');
+          ctx.fillStyle = grad;
+          ctx.fillRect(0, 0, 180, 180);
+
+          // Outer ring
+          ctx.strokeStyle = 'rgba(16, 185, 129, 0.35)';
+          ctx.lineWidth = 6;
+          ctx.beginPath();
+          ctx.arc(90, 90, 62, 0, Math.PI * 2);
+          ctx.stroke();
+
+          // Pulse line
+          ctx.strokeStyle = '#10b981';
+          ctx.lineWidth = 10;
+          ctx.lineCap = 'round';
+          ctx.lineJoin = 'round';
+          ctx.beginPath();
+          ctx.moveTo(38, 92);
+          ctx.lineTo(64, 92);
+          ctx.lineTo(78, 56);
+          ctx.lineTo(102, 126);
+          ctx.lineTo(118, 80);
+          ctx.lineTo(130, 92);
+          ctx.lineTo(142, 92);
+          ctx.stroke();
+
+          const pngDataUrl = canvas.toDataURL('image/png');
+          const appleLink = document.getElementById('apple-touch-icon-link');
+          if (appleLink) appleLink.href = pngDataUrl;
+        } catch (_) {}
+      }
+
+      // Service Worker registration for offline app-shell caching and PWA installability
+      function registerInlineServiceWorker() {
+        const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+        if (isStandalone) {
+          elPwaMode.textContent = 'STANDALONE PWA ACTIVE';
+        }
+
+        if (!('serviceWorker' in navigator)) return;
+
+        navigator.serviceWorker.register('/status/sw.js', { scope: '/status/' }).catch(() => {
+          navigator.serviceWorker.register('sw.js').catch(() => {});
+        });
+      }
+
+      // ---------------- History tab (incident log + 30-day uptime) ----------------
+      const elViewLive = document.getElementById('view-live');
+      const elViewHistory = document.getElementById('view-history');
+      const elTabLive = document.getElementById('tab-btn-live');
+      const elTabHistory = document.getElementById('tab-btn-history');
+      const elHistoryBadge = document.getElementById('tab-badge-history');
+      const elHistorySearch = document.getElementById('history-search');
+      const elHistoryMeta = document.getElementById('history-meta');
+      let historyData = loadCachedHistory();
+      let activeTab = 'live';
+
+      function loadCachedHistory() {
+        try {
+          const raw = localStorage.getItem(HISTORY_CACHE_KEY);
+          return raw ? JSON.parse(raw) : null;
+        } catch (_) { return null; }
+      }
+
+      function saveCachedHistory(d) {
+        try { localStorage.setItem(HISTORY_CACHE_KEY, JSON.stringify(d)); } catch (_) {}
+      }
+
+      function fmtDur(sec) {
+        sec = Math.max(0, Math.round(Number(sec) || 0));
+        if (sec < 60) return sec + 's';
+        if (sec < 3600) return Math.floor(sec / 60) + 'm';
+        if (sec < 86400) return Math.floor(sec / 3600) + 'h ' + Math.floor((sec % 3600) / 60) + 'm';
+        return Math.floor(sec / 86400) + 'd ' + Math.floor((sec % 86400) / 3600) + 'h';
+      }
+
+      function fmtAbs(ts) {
+        if (!ts) return '—';
+        const d = new Date(ts * 1000);
+        const today = new Date();
+        const sameDay = d.toDateString() === today.toDateString();
+        const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        if (sameDay) return time;
+        return d.toLocaleDateString([], { month: 'short', day: '2-digit' }) + ' ' + time;
+      }
+
+      function switchTab(tab) {
+        activeTab = tab === 'history' ? 'history' : 'live';
+        const isHistory = activeTab === 'history';
+        if (elViewLive) elViewLive.classList.toggle('view-hidden', isHistory);
+        if (elViewHistory) elViewHistory.classList.toggle('view-hidden', !isHistory);
+        if (elTabLive) elTabLive.classList.toggle('active', !isHistory);
+        if (elTabHistory) elTabHistory.classList.toggle('active', isHistory);
+        if (isHistory) {
+          renderHistory();
+          if (!historyData || !historyData.generated || (Date.now() / 1000 - historyData.generated) > 60) {
+            fetchHistory(true);
+          }
+        }
+        try { localStorage.setItem(ACTIVE_TAB_KEY, activeTab); } catch (_) {}
+      }
+
+      async function fetchHistory(force) {
+        try {
+          const res = await fetch(API_HISTORY_ENDPOINT + (force ? ('?_=' + Date.now()) : ''), { cache: 'no-store' });
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          const body = await res.json();
+          if (body && body.error) throw new Error(body.error);
+          historyData = body;
+          saveCachedHistory(body);
+          renderHistory();
+        } catch (err) {
+          if (elHistoryMeta) {
+            elHistoryMeta.textContent = 'History unavailable (' + String(err.message || err).slice(0, 70) + ') — showing last cached copy.';
+          }
+          renderHistory(true);
+        }
+      }
+
+      function renderHistory(failed) {
+        const bodyEl = document.getElementById('history-incident-body');
+        const upEl = document.getElementById('history-uptime-body');
+        if (!bodyEl || !upEl) return;
+
+        if (!historyData) {
+          bodyEl.innerHTML = '<tr><td colspan="5" class="history-empty">No history yet — the log starts recording with the first poll after deploy.</td></tr>';
+          upEl.innerHTML = '<tr><td colspan="5" class="history-empty">No uptime data yet.</td></tr>';
+          return;
+        }
+
+        const kpi = historyData.kpi || {};
+        const set = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
+        // Counts read "real + intentional": red is breakage, amber is what you chose
+        // to switch off. Two colours in one number beats a footnote you'd have to read.
+        const countHtml = (real, intent) => {
+          const r = Number(real) || 0;
+          const i = Number(intent) || 0;
+          if (!i) return `<span class="num-real">${r}</span>`;
+          return `<span class="num-real">${r}</span><span class="num-sep">+</span><span class="num-intent">${i}</span>`;
+        };
+        const setHtml = (id, html) => { const e = document.getElementById(id); if (e) e.innerHTML = html; };
+
+        setHtml('h-kpi-incidents', countHtml(kpi.incidents_real, kpi.intentional));
+        setHtml('h-kpi-ongoing', countHtml(kpi.ongoing_real, kpi.intentional_ongoing));
+        set('h-kpi-worst', (kpi.worst_uptime != null ? Number(kpi.worst_uptime).toFixed(2) + '%' : '—'));
+
+        set('h-kpi-incidents-sub', '');
+        set('h-kpi-ongoing-sub', '');
+        const mttrUsable = kpi.mttr_n > 0 && kpi.mttr_s != null;
+        set('h-kpi-mttr', mttrUsable ? fmtDur(kpi.mttr_s) : '—');
+        set('h-kpi-mttr-sub', mttrUsable ? `n=${kpi.mttr_n} recovered` : 'no recoveries yet');
+        set('h-kpi-worst-sub', kpi.uptime_services ? `${kpi.uptime_services} services tracked` : '');
+
+        if (elHistoryBadge) {
+          elHistoryBadge.textContent = kpi.ongoing ? String(kpi.ongoing) + ' LIVE' : String(kpi.incidents_30d || 0);
+        }
+
+        if (elHistoryMeta && !failed) {
+          const when = historyData.generated ? new Date(historyData.generated * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '--';
+          elHistoryMeta.textContent = 'Generated ' + when + ' · window ' + (historyData.window_days || 30) + 'd · raw checks 24h, uptime rolled hourly';
+        }
+
+        const q = (elHistorySearch && elHistorySearch.value ? elHistorySearch.value : '').toLowerCase().trim();
+        const incidents = (historyData.incidents || []).filter(i => {
+          if (!q) return true;
+          return [i.name, i.group, i.detail, i.service_id].join(' ').toLowerCase().includes(q);
+        });
+
+        if (!incidents.length) {
+          bodyEl.innerHTML = '<tr><td colspan="5" class="history-empty">' + (q ? 'Nothing matches that filter.' : 'No outages recorded in the last 30 days.') + '</td></tr>';
+        } else {
+          bodyEl.innerHTML = incidents.map(i => {
+            const state = i.ongoing
+              ? '<span class="inc-ongoing">ONGOING</span>'
+              : '<span class="inc-closed">recovered</span>';
+            return '<tr>' +
+              '<td><strong>' + escapeHtml(i.name) + '</strong>' + (i.intentional ? ' <span class="stamp-intended">intended</span>' : '') + '<br><span style="color: var(--text-muted); font-size: 0.72rem;">' + escapeHtml(i.group || '') + '</span></td>' +
+              '<td>' + fmtAbs(i.started_ts) + '</td>' +
+              '<td>' + (i.ongoing ? state : fmtAbs(i.ended_ts)) + '</td>' +
+              '<td style="font-family: var(--font-mono);">' + fmtDur(i.duration_s) + '</td>' +
+              '<td style="color: var(--text-muted); font-size: 0.74rem;">' + escapeHtml(i.detail || '') + '</td>' +
+              '</tr>';
+          }).join('');
+        }
+
+        const uptime = historyData.uptime || [];
+        if (!uptime.length) {
+          upEl.innerHTML = '<tr><td colspan="5" class="history-empty">No uptime data yet — it accumulates from the first poll.</td></tr>';
+        } else {
+          upEl.innerHTML = uptime.map(u => {
+            const pct = Number(u.uptime_pct) || 0;
+            const cls = pct >= 99.5 ? '' : (pct >= 95 ? ' warn' : ' bad');
+            return '<tr>' +
+              '<td><strong>' + escapeHtml(u.name) + '</strong></td>' +
+              '<td style="color: var(--text-muted); font-size: 0.74rem;">' + escapeHtml(u.group || '') + '</td>' +
+              '<td><div style="display:flex; align-items:center; gap:0.5rem;"><div class="uptime-bar' + cls + '"><span style="width:' + Math.max(2, Math.min(100, pct)) + '%;"></span></div>' +
+              '<span style="font-family: var(--font-mono); white-space:nowrap;">' + pct.toFixed(2) + '%</span></div></td>' +
+              '<td style="font-family: var(--font-mono); color: var(--text-muted);">' + (u.checks || 0) + '</td>' +
+              '<td style="font-family: var(--font-mono); color: ' + (u.down_checks ? '#fca5a5' : 'var(--text-muted)') + ';">' + (u.down_checks || 0) + '</td>' +
+              '</tr>';
+          }).join('');
+        }
+      }
+
+      if (elTabLive) elTabLive.addEventListener('click', () => switchTab('live'));
+      if (elTabHistory) elTabHistory.addEventListener('click', () => switchTab('history'));
+      if (elHistorySearch) elHistorySearch.addEventListener('input', () => renderHistory());
+      const elHistoryReload = document.getElementById('history-reload');
+      if (elHistoryReload) elHistoryReload.addEventListener('click', () => fetchHistory(true));
+
+      // Event Listeners
+      elRefreshBtn.addEventListener('click', () => {
+        fetchStatus(true);
+      });
+
+      window.addEventListener('online', () => {
+        elConnectionAlert.classList.remove('visible');
+        fetchStatus(true);
+      });
+
+      window.addEventListener('offline', () => {
+        const snapTime = lastFetchTimeMs ? new Date(lastFetchTimeMs).toLocaleTimeString() : (currentData.timestamp ? new Date(currentData.timestamp * 1000).toLocaleTimeString() : 'cached');
+        elConnectionAlertText.textContent = `Offline • Showing cached snapshot (${snapTime}). Reconnecting...`;
+        elConnectionAlert.classList.add('visible');
+        renderDashboard(currentData);
+      });
+
+      // Ignore/Unignore buttons on down cards (event delegation; buttons only exist when a service is down)
+      elGroupsContainer.addEventListener('click', (e) => {
+        const btn = e.target.closest('.ignore-btn');
+        if (!btn) return;
+        const sid = btn.getAttribute('data-ignore-id');
+        if (sid) toggleIgnore(sid);
+      });
+
+      // "Intended" buttons: meant-to-be-off services (still alert, excluded from stats)
+      elGroupsContainer.addEventListener('click', (e) => {
+        const btn = e.target.closest('[data-intentional-id]');
+        if (!btn) return;
+        const sid = btn.getAttribute('data-intentional-id');
+        if (sid) toggleIntentional(sid);
+      });
+
+      // Service control buttons — delegated, because the grid is re-rendered every poll
+      elGroupsContainer.addEventListener('click', async (e) => {
+        const btn = e.target.closest('.ctl-btn');
+        if (!btn || btn.disabled) return;
+        const target = btn.dataset.controlTarget;
+        const action = btn.dataset.controlAction;
+        const card = btn.closest('.service-card');
+        const msg = card ? card.querySelector('.ctl-msg') : null;
+
+        // Two-tap guard on Stop: first tap arms, second tap within 5s fires
+        if (action === 'stop' && btn.dataset.armed !== '1') {
+          btn.dataset.armed = '1';
+          btn.classList.add('armed');
+          btn.textContent = 'Confirm stop';
+          setTimeout(() => {
+            if (btn.isConnected) {
+              btn.dataset.armed = '';
+              btn.classList.remove('armed');
+              btn.textContent = 'Stop';
+            }
+          }, 5000);
+          return;
+        }
+
+        btn.disabled = true;
+        btn.textContent = action === 'stop' ? 'Stopping\u2026' : 'Starting\u2026';
+        if (msg) msg.textContent = '';
+        try {
+          const res = await fetch(API_BASE + '/api/action', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ target: target, action: action })
+          });
+          const body = await res.json().catch(() => ({}));
+          if (!res.ok || !body.ok) throw new Error(body.message || body.error || ('HTTP ' + res.status));
+          if (msg) msg.textContent = body.message || 'ok';
+          setTimeout(() => fetchStatus(true), action === 'start' ? 4000 : 2000);
+        } catch (err) {
+          if (msg) msg.textContent = String(err.message || err).slice(0, 80);
+          btn.disabled = false;
+          btn.textContent = action === 'stop' ? 'Stop' : 'Start';
+          btn.dataset.armed = '';
+          btn.classList.remove('armed');
+        }
+      });
+
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') {
+          fetchStatus(true);
+        }
+      });
+
+      // Persist collapsed/expanded state of domain groups (toggle doesn't bubble; capture phase catches it)
+      document.addEventListener('toggle', (e) => {
+        const det = e.target;
+        if (det && det.classList && det.classList.contains('group-details')) {
+          const g = det.getAttribute('data-group');
+          if (!g) return;
+          if (det.open) collapsedGroups.delete(g);
+          else collapsedGroups.add(g);
+          saveCollapsedGroups();
+        }
+      }, true);
+
+      // Initialize App
+      updateRollingHistory(currentData);
+      renderDashboard(currentData);
+      setupiOSAppIcons();
+      registerInlineServiceWorker();
+      try {
+        switchTab(localStorage.getItem(ACTIVE_TAB_KEY) === 'history' ? 'history' : 'live');
+      } catch (_) {
+        switchTab('live');
+      }
+      fetchStatus(false);
+      startPollingLoop();
+    })();
+  </script>
+</body>
+</html>
