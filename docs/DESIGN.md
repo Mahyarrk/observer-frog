@@ -28,7 +28,11 @@ Build plan and work-package gates live outside this document (project roadmap, v
 10. **Every probe result is `(state, detail, latency_ms)`.** Unsupported or unprivileged →
     `unavailable`, never `down`.
 11. **Detail strings capped at ~120 chars** before storage or notification.
-12. **Config hot reload on `stat` mtime.** Adding a service never requires a restart.
+12. **One flag, not two (schema v2).** `ignored` means "I know about this": it silences alerting,
+    removes the service from uptime/MTTR, and is the amber half of the History counters. An earlier
+    `intentional` flag meant the same thing in different words and was folded into `ignored` by the
+    v1→v2 migration, which copies the rows before dropping the table.
+13. **Config hot reload on `stat` mtime.** Adding a service never requires a restart.
 
 ## Payload contract
 
@@ -43,7 +47,6 @@ Measured from a running instance, not invented. Epochs are absolute seconds (`in
 | `devices` | list | machine cards |
 | `history` | dict | `id -> [0\|1, ...]`, 7 points, sparkline |
 | `ignored` | list[str] | silenced ids |
-| `intentional` | list[str] | deliberately-off ids |
 | `confirm_polls` | int | consecutive failures before `down` (4) |
 | `node_ts` | int | remote node's own report epoch (v0.2) |
 
@@ -67,7 +70,7 @@ capability is absent by omission, which is cheaper and safer than deleting UI th
 may want back with proper auth.
 
 `GET /api/history?days=N` → `{generated, window_days, incidents[], uptime{}, kpi{}}`;
-`incidents[]`: `{id, service_id, name, group, started_ts, ended_ts|null, ongoing, duration_s, detail, intentional}`.
+`incidents[]`: `{id, service_id, name, group, started_ts, ended_ts|null, ongoing, duration_s, detail, ignored}`.
 
 ## Invariants
 
@@ -82,9 +85,9 @@ frontend invariants added during the design of this build. Each has a test named
   `no longer reporting` after 4 absences.
 - **I3** An empty payload is a broken poll, not N simultaneous deaths; the absence pass is skipped.
 - **I4** First sighting seeds state silently.
-- **I5** `intentional` services still alert on transitions but are excluded from uptime, MTTR,
+- **I5** `ignored` services still alert on transitions but are excluded from uptime, MTTR,
   worst-uptime and `incidents_30d`.
-- **I6** Ignore/intentional flags are read at serve time, never baked into the snapshot.
+- **I6** The ignored flag is read at serve time, never baked into the snapshot.
 - **I7** ntfy publishes with headers (`X-Title`, `X-Priority`, `X-Tags`) and a plain-text body.
 - **I8** No notifier goes through the monitored proxy; per-sink `use_proxy` overrides this once a
   sink genuinely needs one.

@@ -100,7 +100,7 @@ a discovery engine.
 | `/api/status` | current snapshot (never cached by the service worker) |
 | `/api/history?days=N` | incidents, uptime and KPIs |
 | `/api/poll` | force one wave (a second concurrent caller gets 409) |
-| `/api/ignore`, `/api/intentional` | POST `{id, ignored}` / `{id, intentional}` |
+| `/api/ignore` | POST `{id, ignored}` — one flag, no second meaning |
 | `/api/health` | liveness |
 
 ## Checking a machine without starting the server

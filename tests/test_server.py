@@ -61,7 +61,7 @@ class RouteTests(_Base):
         status, body, _ = self.get("/api/status")
         self.assertEqual(status, 200)
         for key in ("timestamp", "services", "devices", "history", "ignored",
-                    "intentional", "confirm_polls", "node_ts"):
+                    "confirm_polls", "node_ts"):
             self.assertIn(key, body, f"payload lost {key}")
 
     def test_status_is_not_cached(self):
@@ -116,9 +116,12 @@ class WriteEndpointTests(_Base):
         status, body, _ = self.post("/api/ignore", {"id": "web", "ignored": False})
         self.assertEqual(body["ignored"], [])
 
-    def test_intentional_round_trip(self):
-        _, body, _ = self.post("/api/intentional", {"id": "docker", "intentional": True})
-        self.assertEqual(body["intentional"], ["docker"])
+    def test_intentional_endpoint_is_gone(self):
+        """One flag only: the second endpoint must not exist."""
+        import urllib.error
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            self.post("/api/intentional", {"id": "docker", "intentional": True})
+        self.assertEqual(ctx.exception.code, 404)
 
     def test_missing_id_is_400(self):
         with self.assertRaises(urllib.error.HTTPError) as ctx:
@@ -207,59 +210,60 @@ class HistoryTests(_Base):
         _, body, _ = self.get("/api/history?days=banana")
         self.assertEqual(body["window_days"], 30)
 
-    def test_kpi_excludes_intentional_services_from_uptime(self):
+    def test_kpi_excludes_ignored_services_from_uptime(self):
         now = int(time.time())
         state.apply_wave(self.cfg.db_path, "local",
                          [state.Row("web", "Web", "T", "up", "", 1),
                           state.Row("docker", "Docker", "T", "up", "", 1)], ts=now)
         with db.connect(self.cfg.db_path) as conn:
-            conn.execute("INSERT INTO intentional VALUES ('local','docker')")
+            conn.execute("INSERT INTO ignored VALUES ('local','docker')")
         _, body, _ = self.get("/api/history?days=7")
         names = [u["service_id"] for u in body["uptime"]]
-        self.assertNotIn("docker", names, "an intentional service reached worst-uptime")
+        self.assertNotIn("docker", names, "an ignored service reached worst-uptime")
         self.assertIn("web", names)
         self.assertEqual(body["kpi"]["uptime_services"], 1)
 
-    def test_ongoing_counts_split_on_ignored_only(self):
-        """Red = not ignored, amber = ignored. `intentional` must not touch this counter."""
+    def test_ongoing_counts_split_on_ignored(self):
+        """Red = not ignored, amber = ignored."""
         now = int(time.time())
         rows = [state.Row(s, s.title(), "T", "down", "not running", 0)
                 for s in ("alpha", "beta", "gamma")]
         self.apply_history_wave(self.cfg.db_path, rows, now)
         with db.connect(self.cfg.db_path) as conn:
-            conn.execute("INSERT INTO intentional VALUES ('local','beta')")
+            conn.execute("INSERT INTO ignored VALUES ('local','beta')")
             conn.execute("INSERT INTO ignored VALUES ('local','gamma')")
         _, body, _ = self.get("/api/history?days=7")
         kpi = body["kpi"]
         self.assertEqual(kpi["ongoing"], 3, "ongoing must count every open incident")
-        self.assertEqual(kpi["ongoing_real"], 2, "alpha and beta are not ignored")
-        self.assertEqual(kpi["ongoing_ignored"], 1, "gamma alone is ignored")
-        self.assertEqual(kpi["incidents_real"], 2)
-        # beta is intentional but NOT ignored: intentional must not move it into amber
-        self.assertEqual(kpi["intentional"], 1)
+        self.assertEqual(kpi["ongoing_real"], 1, "alpha alone is not ignored")
+        self.assertEqual(kpi["ongoing_ignored"], 2, "beta and gamma are ignored")
+        self.assertEqual(kpi["incidents_real"], 1)
 
-    def test_intentional_alone_does_not_change_the_red_count(self):
-        """Regression: putting `intentional` into the amber bucket hid a live problem."""
+    def test_ignored_is_the_only_flag_that_moves_a_service(self):
+        """Regression: a second flag once made an unacknowledged outage look acknowledged."""
         now = int(time.time())
         self.apply_history_wave(self.cfg.db_path,
                                 [state.Row("beta", "Beta", "T", "down", "gone", 0)], now)
-        with db.connect(self.cfg.db_path) as conn:
-            conn.execute("INSERT INTO intentional VALUES ('local','beta')")
         _, body, _ = self.get("/api/history?days=7")
-        kpi = body["kpi"]
-        self.assertEqual(kpi["ongoing_real"], 1, "an intentional-but-unignored outage must stay red")
-        self.assertEqual(kpi["ongoing_ignored"], 0)
+        self.assertEqual(body["kpi"]["ongoing_real"], 1, "an unignored outage must be red")
+        self.assertEqual(body["kpi"]["ongoing_ignored"], 0)
 
-    def test_worst_uptime_ignores_intentional_services(self):
+        with db.connect(self.cfg.db_path) as conn:
+            conn.execute("INSERT INTO ignored VALUES ('local','beta')")
+        _, body, _ = self.get("/api/history?days=7")
+        self.assertEqual(body["kpi"]["ongoing_real"], 0)
+        self.assertEqual(body["kpi"]["ongoing_ignored"], 1)
+
+    def test_worst_uptime_ignores_ignored_services(self):
         now = int(time.time())
         self.apply_history_wave(self.cfg.db_path,
                            [state.Row("web", "Web", "T", "up", "", 1),
                             state.Row("dead", "Dead", "T", "down", "gone", 0)], now)
         with db.connect(self.cfg.db_path) as conn:
-            conn.execute("INSERT INTO intentional VALUES ('local','dead')")
+            conn.execute("INSERT INTO ignored VALUES ('local','dead')")
         _, body, _ = self.get("/api/history?days=7")
         self.assertEqual(body["kpi"]["worst_uptime"], 100.0,
-                         "an intentional outage dragged worst-uptime down")
+                         "an ignored outage dragged worst-uptime down")
         self.assertEqual(body["kpi"]["worst_service"], "Web")
 
 

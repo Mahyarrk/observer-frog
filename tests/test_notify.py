@@ -11,9 +11,9 @@ from statushub.config import Sink
 from statushub.state import Change
 
 
-def change(sid="web", frm="up", to="down", first=False, intentional=False):
+def change(sid="web", frm="up", to="down", first=False, ignored=False):
     return Change("local", sid, sid.title(), "Test", frm, to, "connection refused", 1_800_000_000,
-                  intentional=intentional, first_sighting=first)
+                  ignored=ignored, first_sighting=first)
 
 
 class CapturingServer:
@@ -140,9 +140,9 @@ class ChangeToEventTests(unittest.TestCase):
         self.assertEqual(events[0].priority, notify.PRIORITY_RECOVERY)
         self.assertIn("recovered", events[0].title)
 
-    def test_intentional_is_marked_in_the_title(self):
-        events = notify.events_from_changes([change(sid="docker", intentional=True)])
-        self.assertIn("intentional", events[0].title)
+    def test_ignored_is_marked_in_the_title(self):
+        events = notify.events_from_changes([change(sid="docker", ignored=True)])
+        self.assertIn("ignored", events[0].title)
 
     def test_click_points_at_the_dashboard(self):
         events = notify.events_from_changes([change()], dashboard_url="https://hub/status/")

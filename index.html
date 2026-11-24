@@ -402,7 +402,7 @@
       text-overflow: ellipsis;
     }
 
-    /* "2 + 3": red = real outages, amber = the ones you marked intentional. */
+    /* "2 + 3": red = outages you have not acknowledged, amber = the ones you ignored. */
     .history-kpi .num-real {
       color: var(--down-color);
     }
@@ -506,20 +506,10 @@
       padding: 0.05rem 0.3rem;
       margin-left: 0.25rem;
       white-space: nowrap;
+      display: inline-block;
+      vertical-align: middle;
     }
 
-    .stamp-intended {
-      font-family: var(--font-mono);
-      font-size: var(--t-label);
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
-      color: #7dd3fc;
-      border: 1px solid rgba(56, 189, 248, 0.4);
-      background: rgba(56, 189, 248, 0.12);
-      border-radius: var(--r-xs);
-      padding: 0.05rem 0.3rem;
-      margin-left: 0.3rem;
-    }
 
     .uptime-bar {
       position: relative;
@@ -1777,6 +1767,9 @@
       'use strict';
 
       const API_BASE = (window.location.pathname.replace(/\/$/, '') || '');
+      // Bump on every shell change. Declared before first use: a `const` referenced above its
+      // declaration throws a TDZ error and takes the whole script down (it did).
+      const BUILD = 'of-4';
       // Show the address actually in use, not a baked-in host.
       (function () {
         const el = document.getElementById('brand-url');
@@ -1791,16 +1784,11 @@
       const API_ENDPOINT = API_BASE + '/api/status';
       const POLL_ENDPOINT = API_BASE + '/api/poll';
       const POLL_INTERVAL_SEC = 30;
-      // Bump on every shell change. Shown in the footer so a stale service-worker can be
-      // diagnosed by looking, instead of guessing whether the phone got the new code.
-      const BUILD = 'of-3';
       const STORAGE_KEY = 'observerfrog_status_cache_v1';
       const HISTORY_STORAGE_KEY = 'observerfrog_rolling_history_v1';
       const IGNORED_STORAGE_KEY = 'observerfrog_ignored_services_v1';
       const API_HISTORY_ENDPOINT = API_BASE + '/api/history';
       const API_IGNORE_ENDPOINT = API_BASE + '/api/ignore';
-      const API_INTENTIONAL_ENDPOINT = API_BASE + '/api/intentional';
-      const INTENTIONAL_STORAGE_KEY = 'observerfrog_intentional_services_v1';
       const HISTORY_CACHE_KEY = 'observerfrog_history_cache_v1';
       const ACTIVE_TAB_KEY = 'observerfrog_active_tab_v1';
       const MAX_HISTORY_POINTS = 7;
@@ -1832,7 +1820,6 @@
       let rollingHistory = loadRollingHistory();
       let collapsedGroups = loadCollapsedGroups();
       let ignoredServices = loadIgnoredServices();
-      let intentionalServices = loadIntentionalServices();
       let lastFetchTimeMs = null;
       let countdownSec = POLL_INTERVAL_SEC;
       let isFetching = false;
@@ -1869,20 +1856,7 @@
         } catch (_) {}
       }
 
-      function loadIntentionalServices() {
-        try {
-          const raw = localStorage.getItem(INTENTIONAL_STORAGE_KEY);
-          return new Set(raw ? JSON.parse(raw) : []);
-        } catch (_) {
-          return new Set();
-        }
-      }
 
-      function saveIntentionalServices() {
-        try {
-          localStorage.setItem(INTENTIONAL_STORAGE_KEY, JSON.stringify([...intentionalServices]));
-        } catch (_) {}
-      }
 
       // Optimistic flag writes must also patch the cached snapshot, otherwise the
       // very next renderDashboard() re-hydrates the flag set from the stale payload
@@ -1896,28 +1870,6 @@
         currentData[kind] = [...cur];
       }
 
-      function toggleIntentional(serviceId) {
-        const want = !intentionalServices.has(serviceId);
-        if (want) intentionalServices.add(serviceId);
-        else intentionalServices.delete(serviceId);
-        saveIntentionalServices();
-        setLocalFlag('intentional', serviceId, want);
-        renderDashboard(currentData);
-        fetch(API_INTENTIONAL_ENDPOINT, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id: serviceId, intentional: want })
-        }).then(r => r.json()).then(body => {
-          if (body && Array.isArray(body.intentional_ids)) {
-            intentionalServices = new Set(body.intentional_ids);
-            saveIntentionalServices();
-            setLocalFlag('intentional', serviceId, want);
-            if (currentData) currentData.intentional = body.intentional_ids;
-            renderDashboard(currentData);
-            if (typeof fetchHistory === 'function' && activeTab === 'history') fetchHistory(true);
-          }
-        }).catch(() => {});
-      }
 
       function toggleIgnore(serviceId) {
         const wantIgnored = !ignoredServices.has(serviceId);
@@ -2179,15 +2131,6 @@
           }
         }
 
-        if (Array.isArray(data.intentional)) {
-          const srvSet = new Set(data.intentional);
-          const same = srvSet.size === intentionalServices.size && [...srvSet].every(x => intentionalServices.has(x));
-          if (!same) {
-            intentionalServices = srvSet;
-            saveIntentionalServices();
-          }
-        }
-
         const isOffline = elConnectionAlert.classList.contains('visible') || !navigator.onLine;
         const isStale = isOffline || (lastFetchTimeMs && (Date.now() - lastFetchTimeMs > 120000));
 
@@ -2295,14 +2238,6 @@
             const ignoreBtnHtml = st === 'down'
               ? `<button class="ignore-btn${isIgnored ? ' ignored' : ''}" data-ignore-id="${escapeHtml(svc.id)}" type="button">${isIgnored ? 'Unignore' : 'Ignore'}</button>`
               : '';
-            // "Intended": meant to be off. Still alerts on transitions; only keeps
-            // the service out of uptime percentages and MTTR in the History tab.
-            // One button, labelled with the current state, so it never reads as an
-            // instruction: "Intended" (blue) / "Unintended" (plain). Click toggles.
-            const isIntended = intentionalServices.has(svc.id);
-            const intendedBtnHtml = (st === 'down' || isIntended)
-              ? `<button class="ignore-btn${isIntended ? ' intended' : ''}" data-intentional-id="${escapeHtml(svc.id)}" type="button" title="${isIntended ? 'Meant to be off: excluded from uptime stats, still alerts' : 'Counted as a real outage: included in uptime stats'}">${isIntended ? 'Intended' : 'Unintended'}</button>`
-              : '';
 
             let childrenHtml = '';
             if (Array.isArray(svc.children) && svc.children.length > 0) {
@@ -2351,7 +2286,6 @@
                   </div>
                   <div class="card-actions">
                     ${isStale ? '<span class="stale-badge" title="Data from cached snapshot">CACHED</span>' : ''}
-                    ${intendedBtnHtml}
                     ${ignoreBtnHtml}
                     <span class="status-pill ${pillClass}">
                       <span class="dot"></span>
@@ -2660,8 +2594,7 @@
         const kpi = historyData.kpi || {};
         const set = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
         // Counts read "unacknowledged + ignored": red is a problem you still need to deal
-        // with, amber is one you silenced that is nonetheless still down. Intentional
-        // (meant-to-be-off) is a separate flag and does not enter this counter at all.
+        // with, amber is one you silenced and that is nonetheless still down.
         const countHtml = (real, ignored) => {
           const r = Number(real) || 0;
           const i = Number(ignored) || 0;
@@ -2712,8 +2645,8 @@
             return '<tr>' +
               '<td><strong>' + escapeHtml(i.name) + '</strong>' +
               (i.ignored ? ' <span class="stamp-ignored">ignored</span>' : '') +
-              (i.intentional ? ' <span class="stamp-intended">intended</span>' : '') + '<br><span style="color: var(--text-muted); font-size: var(--t-label);">' + escapeHtml(i.group || '') + '</span></td>' +
-              '<td>' + fmtAbs(i.started_ts) + '</td>' +
+              '<br><span style="color: var(--text-muted); font-size: var(--t-label);">' + escapeHtml(i.group || '') + '</span></td>' +
+              '<td style="white-space: nowrap;">' + fmtAbs(i.started_ts) + '</td>' +
               '<td class="col-optional">' + (i.ongoing ? state : fmtAbs(i.ended_ts)) + '</td>' +
               '<td style="font-family: var(--font-mono);">' + fmtDur(i.duration_s) + '</td>' +
               '<td class="col-optional" style="color: var(--text-muted); font-size: var(--t-meta);">' + escapeHtml(i.detail || '') + '</td>' +
@@ -2769,14 +2702,6 @@
         if (!btn) return;
         const sid = btn.getAttribute('data-ignore-id');
         if (sid) toggleIgnore(sid);
-      });
-
-      // "Intended" buttons: meant-to-be-off services (still alert, excluded from stats)
-      elGroupsContainer.addEventListener('click', (e) => {
-        const btn = e.target.closest('[data-intentional-id]');
-        if (!btn) return;
-        const sid = btn.getAttribute('data-intentional-id');
-        if (sid) toggleIntentional(sid);
       });
 
       // Service control buttons — delegated, because the grid is re-rendered every poll

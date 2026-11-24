@@ -74,9 +74,7 @@ class App:
             snap["services"] = [dict(r) for r in snap.get("services", [])]
             snap["devices"] = [dict(d) for d in snap.get("devices", [])]
 
-        ignored, intentional = db.flags(self.cfg.db_path, self.cfg.node_id)
-        snap["ignored"] = ignored
-        snap["intentional"] = intentional
+        snap["ignored"] = db.ignored_ids(self.cfg.db_path, self.cfg.node_id)
         if with_history:
             snap["history"] = self.history_map()
             snap["self_monitoring"] = {
@@ -230,7 +228,6 @@ def make_handler(app: App):
             path = self._path()
             routes = {
                 "/api/ignore": self._set_flag("ignored", "ignored"),
-                "/api/intentional": self._set_flag("intentional", "intentional"),
             }
             handler = routes.get(path) or routes.get(path.replace("/status", "", 1))
             if handler is None:
@@ -261,16 +258,12 @@ def make_handler(app: App):
                 except Exception as e:
                     self._json(500, {"ok": False, "error": clip(str(e))})
                     return
-                ignored, intentional = db.flags(app.cfg.db_path, app.cfg.node_id)
-                # Both shapes: the flag as a boolean for this id, and the full `*_ids` lists the
-                # UI actually reads back. The lists were missing, so the client kept its optimistic
-                # guess and never learned the server's truth.
-                self._json(200, {
-                    "ok": True, "id": sid,
-                    field: want,
-                    "ignored": ignored, "ignored_ids": ignored,
-                    "intentional": intentional, "intentional_ids": intentional,
-                })
+                ignored = db.ignored_ids(app.cfg.db_path, app.cfg.node_id)
+                # Both shapes: the flag as a boolean for this id, and the full list the UI reads
+                # back. The list was missing once, so the client kept its optimistic guess and
+                # never learned the server's truth.
+                self._json(200, {"ok": True, "id": sid, field: want,
+                                 "ignored": ignored, "ignored_ids": ignored})
             return handle
 
     return Handler
@@ -279,14 +272,12 @@ def make_handler(app: App):
 def build_history(app: App, days: int = 30) -> dict:
     """The `/api/history` contract the UI reads: incidents list, uptime rows, and KPIs.
 
-    KPI naming follows the original implementation (`ongoing_real`/`intentional_ongoing`), because
-    the frontend renders those keys and silently showed zero when they were absent.
+    KPI names match what the frontend reads (`ongoing_real`/`ongoing_ignored`); when they were
+    absent the counts silently rendered as zero.
 
-    Two independent flags, two independent rules — do not conflate them:
-      - `ignored` (silenced by choice) drives the red/amber split: red = problems you have not
-        acknowledged, amber = problems you have silenced but that are still down.
-      - `intentional` (meant to be off) is a different question entirely and only affects
-        uptime/MTTR: a deliberately-off service must not drag worst-uptime down (I5).
+    One flag, one rule: `ignored` means "I know about this". It drives the red/amber split
+    (red = not ignored, amber = ignored) AND keeps the service out of uptime/MTTR, so the number
+    you see in History always describes services you actually care about.
     """
     now = int(time.time())
     incidents = state.recent_incidents(app.cfg.db_path, app.cfg.node_id, days=days)
@@ -302,18 +293,16 @@ def build_history(app: App, days: int = 30) -> dict:
         "ongoing": sum(1 for i in incidents if i["ongoing"]),
         "ongoing_real": sum(1 for i in unacknowledged if i["ongoing"]),
         "ongoing_ignored": sum(1 for i in incidents if i["ongoing"] and i["ignored"]),
-        # informational only: how many logged incidents are deliberately-off services
-        "intentional": sum(1 for i in incidents if i["intentional"]),
         "services_affected": len({i["service_id"] for i in unacknowledged}),
         # MTTR only means something with a sample; report n so the UI can say "no recoveries yet"
         "mttr_s": int(sum(i["duration_s"] for i in closed_real) / len(closed_real)) if closed_real else None,
         "mttr_n": len(closed_real),
-        # worst uptime excludes intentional services because uptime_rows() drops them (I5)
+        # worst uptime excludes ignored services because uptime_rows() drops them (I5)
         "worst_uptime": rows[0]["uptime_pct"] if rows else None,
         "worst_service": rows[0]["name"] if rows else None,
         "uptime_services": len(rows),
-        # intentional services are absent from the uptime table by design (I5); say how many
-        "uptime_excluded": len(set(db.flags(app.cfg.db_path, app.cfg.node_id)[1])),
+        # ignored services are absent from the uptime table by design (I5); say how many
+        "uptime_excluded": len(db.ignored_ids(app.cfg.db_path, app.cfg.node_id)),
     }
     return {"generated": now, "window_days": days, "incidents": incidents,
             "uptime": rows, "kpi": kpi}

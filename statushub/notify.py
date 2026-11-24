@@ -59,7 +59,7 @@ def events_from_changes(changes: list[Change], dashboard_url: str = "") -> list[
         if c.first_sighting:
             continue
         if c.is_outage:
-            suffix = " (intentional)" if c.intentional else ""
+            suffix = " (ignored)" if c.ignored else ""
             events.append(Event(
                 title=f"{c.name} is down{suffix}",
                 message=f"{c.detail or 'no detail'}\nnode {c.node_id} · {c.group}",

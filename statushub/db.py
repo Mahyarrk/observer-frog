@@ -10,17 +10,19 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 RAW_RETENTION_S = 86_400          # 24 h of per-check rows
 ROLLUP_RETENTION_S = 2_592_000    # 30 days of hourly counters
 
+# One flag, one meaning: `ignored` means "I know, stop counting it against me". It silences
+# alerting AND removes the service from uptime/MTTR. A second `intentional` flag existed and was
+# dropped in schema v2 — two flags that both meant "I accept this" was one too many.
 TABLES = (
     "service_checks",
     "service_state",
     "incidents",
     "hourly_rollup",
     "ignored",
-    "intentional",
 )
 
 _SCHEMA = """
@@ -81,12 +83,6 @@ CREATE TABLE IF NOT EXISTS ignored (
     service_id TEXT NOT NULL,
     PRIMARY KEY (node_id, service_id)
 );
-
-CREATE TABLE IF NOT EXISTS intentional (
-    node_id    TEXT NOT NULL,
-    service_id TEXT NOT NULL,
-    PRIMARY KEY (node_id, service_id)
-);
 """
 
 
@@ -108,18 +104,42 @@ def connect(path: str | Path):
         conn.close()
 
 
+def _migrate(conn, from_version: int) -> int:
+    """Forward migrations. Each step is idempotent so a crash mid-upgrade is safe to re-run."""
+    version = from_version
+    if version < 2:
+        # v2 dropped `intentional` in favour of `ignored`. Carry the operator's intent across
+        # rather than silently un-ignoring services they had marked as meant-to-be-off.
+        has_table = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='intentional'"
+        ).fetchone()
+        if has_table:
+            conn.execute(
+                "INSERT OR IGNORE INTO ignored (node_id, service_id) "
+                "SELECT node_id, service_id FROM intentional"
+            )
+            conn.execute("DROP TABLE intentional")
+        version = 2
+    return version
+
+
 def init(path: str | Path) -> int:
-    """Create the schema if absent and return the schema version on disk."""
+    """Create or upgrade the schema, and return the version now on disk."""
     with connect(path) as conn:
         conn.executescript(_SCHEMA)
+        now = int(time.time())
         row = conn.execute("SELECT version FROM schema_version LIMIT 1").fetchone()
         if row is None:
             conn.execute(
                 "INSERT INTO schema_version (version, applied_ts) VALUES (?, ?)",
-                (SCHEMA_VERSION, int(time.time())),
+                (SCHEMA_VERSION, now),
             )
             return SCHEMA_VERSION
-        return int(row[0])
+        current = int(row[0])
+        if current < SCHEMA_VERSION:
+            current = _migrate(conn, current)
+            conn.execute("UPDATE schema_version SET version = ?, applied_ts = ?", (current, now))
+        return current
 
 
 def version(path: str | Path) -> int:
@@ -141,11 +161,8 @@ def prune(path: str | Path, now: int | None = None) -> tuple[int, int]:
     return checks, rollups
 
 
-def flags(path: str | Path, node_id: str) -> tuple[list[str], list[str]]:
-    """Read ignored/intentional at serve time — never baked into a snapshot (invariant I6)."""
+def ignored_ids(path: str | Path, node_id: str) -> list[str]:
+    """Read the ignored set at serve time — never baked into a snapshot (invariant I6)."""
     with connect(path) as conn:
-        ignored = [r[0] for r in conn.execute(
+        return [r[0] for r in conn.execute(
             "SELECT service_id FROM ignored WHERE node_id = ? ORDER BY service_id", (node_id,))]
-        intentional = [r[0] for r in conn.execute(
-            "SELECT service_id FROM intentional WHERE node_id = ? ORDER BY service_id", (node_id,))]
-    return ignored, intentional

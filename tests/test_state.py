@@ -22,13 +22,13 @@ class Base(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def wave(self, *rows, ts=None, intentional=None):
-        """`intentional` is applied to the database, not passed through — flags are serve-time (I6)."""
-        if intentional is not None:
+    def wave(self, *rows, ts=None, ignored=None):
+        """`ignored` is written to the database, not passed through — flags are serve-time (I6)."""
+        if ignored is not None:
             with db.connect(self.path) as conn:
-                conn.execute("DELETE FROM intentional WHERE node_id='local'")
-                for sid in intentional:
-                    conn.execute("INSERT OR IGNORE INTO intentional VALUES ('local',?)", (sid,))
+                conn.execute("DELETE FROM ignored WHERE node_id='local'")
+                for sid in ignored:
+                    conn.execute("INSERT OR IGNORE INTO ignored VALUES ('local',?)", (sid,))
         return apply_wave(self.path, "local", list(rows), ts=self.t if ts is None else ts)
 
     def up(self, sid="svc", detail="HTTP 200", ms=5):
@@ -160,42 +160,42 @@ class I4_FirstSightingIsSilent(Base):
         self.assertEqual(len(state.open_incidents(self.path, "local")), 1)
 
 
-class I5_IntentionalExclusion(Base):
-    def test_intentional_service_still_transitions_and_alerts(self):
+class I5_IgnoredExclusion(Base):
+    def test_ignored_service_still_transitions_and_alerts(self):
         self.wave(self.up("docker"))
         for n in (1, 2, 3, 4):
             changes = self.wave(self.down("docker"), ts=self.t + n * 30,
-                                intentional={"docker"})
+                                ignored={"docker"})
         outage = [c for c in changes if c.is_outage]
-        self.assertEqual(len(outage), 1, "an intentional service must still alert on transition")
-        self.assertTrue(outage[0].intentional)
+        self.assertEqual(len(outage), 1, "an ignored service must still alert on transition")
+        self.assertTrue(outage[0].ignored)
 
-    def test_intentional_service_is_excluded_from_uptime(self):
+    def test_ignored_service_is_excluded_from_uptime(self):
         for n in range(4):
             self.wave(self.up("docker"), self.up("web"), ts=self.t + n * 30,
-                      intentional={"docker"})
+                      ignored={"docker"})
         for n in range(4, 8):
             self.wave(Row("docker", "Docker", "Test", "down", "stopped", 0),
-                      self.up("web"), ts=self.t + n * 30, intentional={"docker"})
+                      self.up("web"), ts=self.t + n * 30, ignored={"docker"})
         up = state.uptime(self.path, "local")
         self.assertNotIn("docker", up)
         self.assertIn("web", up)
         self.assertEqual(up["web"], 100.0)
 
-    def test_intentional_service_is_excluded_from_mttr(self):
-        self.wave(self.up("docker"), intentional={"docker"})
+    def test_ignored_service_is_excluded_from_mttr(self):
+        self.wave(self.up("docker"), ignored={"docker"})
         for n in (1, 2, 3, 4):
-            self.wave(self.down("docker"), ts=self.t + n * 30, intentional={"docker"})
-        self.wave(self.up("docker"), ts=self.t + 200, intentional={"docker"})
+            self.wave(self.down("docker"), ts=self.t + n * 30, ignored={"docker"})
+        self.wave(self.up("docker"), ts=self.t + 200, ignored={"docker"})
         self.assertEqual(state.mttr(self.path, "local"), {})
 
-    def test_incidents_are_flagged_intentional(self):
-        self.wave(self.up("docker"), intentional={"docker"})
+    def test_incidents_are_flagged_ignored(self):
+        self.wave(self.up("docker"), ignored={"docker"})
         for n in (1, 2, 3, 4):
-            self.wave(self.down("docker"), ts=self.t + n * 30, intentional={"docker"})
-        self.wave(self.up("docker"), ts=self.t + 200, intentional={"docker"})
+            self.wave(self.down("docker"), ts=self.t + n * 30, ignored={"docker"})
+        self.wave(self.up("docker"), ts=self.t + 200, ignored={"docker"})
         hist = state.recent_incidents(self.path, "local")
-        self.assertTrue(hist[0]["intentional"])
+        self.assertTrue(hist[0]["ignored"])
 
 
 class I6_FlagsAreReadAtServeTime(Base):
@@ -206,9 +206,9 @@ class I6_FlagsAreReadAtServeTime(Base):
             self.wave(self.down("web"), ts=self.t + n * 30)
         self.assertIn("web", state.uptime(self.path, "local"))
         with db.connect(self.path) as conn:
-            conn.execute("INSERT INTO intentional VALUES ('local','web')")
+            conn.execute("INSERT INTO ignored VALUES ('local','web')")
         self.assertNotIn("web", state.uptime(self.path, "local"),
-                         "uptime still counted a service flagged intentional after the fact")
+                         "uptime still counted a service flagged ignored after the fact")
 
 
 class UptimeAndRollupTests(Base):

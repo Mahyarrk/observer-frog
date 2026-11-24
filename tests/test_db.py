@@ -28,9 +28,9 @@ class SchemaTests(unittest.TestCase):
             rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
         return [r[1] for r in sorted((r for r in rows if r[5]), key=lambda r: r[5])]
 
-    def test_fresh_db_is_version_1(self):
-        self.assertEqual(db.version(self.path), 1)
-        self.assertEqual(db.SCHEMA_VERSION, 1)
+    def test_fresh_db_is_current_version(self):
+        self.assertEqual(db.version(self.path), 2)
+        self.assertEqual(db.SCHEMA_VERSION, 2)
 
     def test_every_table_carries_node_id(self):
         for table in db.TABLES:
@@ -40,7 +40,6 @@ class SchemaTests(unittest.TestCase):
         self.assertEqual(self._pk("service_state"), ["node_id", "service_id"])
         self.assertEqual(self._pk("hourly_rollup"), ["node_id", "service_id", "hour_ts"])
         self.assertEqual(self._pk("ignored"), ["node_id", "service_id"])
-        self.assertEqual(self._pk("intentional"), ["node_id", "service_id"])
 
     def test_wal_enabled(self):
         with db.connect(self.path) as conn:
@@ -74,14 +73,11 @@ class SchemaTests(unittest.TestCase):
     def test_flags_are_scoped_per_node(self):
         with db.connect(self.path) as conn:
             conn.execute("INSERT INTO ignored VALUES ('local','lmstudio')")
-            conn.execute("INSERT INTO intentional VALUES ('local','docker')")
-            conn.execute("INSERT INTO intentional VALUES ('laptop','terraria')")
-        ignored, intentional = db.flags(self.path, "local")
-        self.assertEqual(ignored, ["lmstudio"])
-        self.assertEqual(intentional, ["docker"])
+            conn.execute("INSERT INTO ignored VALUES ('laptop','terraria')")
+        self.assertEqual(db.ignored_ids(self.path, "local"), ["lmstudio"])
 
     def test_init_is_idempotent(self):
-        self.assertEqual(db.init(self.path), 1)
+        self.assertEqual(db.init(self.path), 2)
         with db.connect(self.path) as conn:
             self.assertEqual(conn.execute("SELECT count(*) FROM schema_version").fetchone()[0], 1)
 

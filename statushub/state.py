@@ -5,7 +5,7 @@ Every rule here exists because it already went wrong once (see docs/DESIGN.md):
   I2  a service absent from an authoritative payload is "no longer reporting" after 4 absences
   I3  an empty payload is a broken poll, not N simultaneous deaths — absence pass skipped
   I4  first sighting seeds state silently
-  I5  intentional services alert on transitions but are excluded from uptime/MTTR
+  I5  ignored services still alert on transitions but are excluded from uptime/MTTR
   I6  flags are read at serve time, never baked in here
 """
 
@@ -40,7 +40,7 @@ class Change:
     to_state: str
     detail: str
     ts: int
-    intentional: bool = False
+    ignored: bool = False
     first_sighting: bool = False
 
     @property
@@ -138,7 +138,7 @@ def _record_rollup(conn, node_id: str, row: Row, ts: int) -> None:
     )
 
 
-def _seed_new(conn, node_id: str, row: Row, ts: int, intentional: set[str]) -> Change:
+def _seed_new(conn, node_id: str, row: Row, ts: int, ignored: set[str]) -> Change:
     """I4 — a first sighting seeds silently, whatever state it arrives in."""
     st = StoredState(state=row.status, fails=0, since_ts=ts, name=row.name,
                      group=row.group, last_detail=row.detail)
@@ -148,16 +148,16 @@ def _seed_new(conn, node_id: str, row: Row, ts: int, intentional: set[str]) -> C
     if row.status == "down":
         _open_incident(conn, node_id, row, ts)
     return Change(node_id, row.service_id, row.name, row.group, "new", row.status, row.detail,
-                  ts, row.service_id in intentional, first_sighting=True)
+                  ts, row.service_id in ignored, first_sighting=True)
 
 
 def _advance(conn, node_id: str, row: Row, prev: StoredState, ts: int,
-             intentional: set[str]) -> Change | None:
+             ignored: set[str]) -> Change | None:
     """Apply one observation to an existing service. Returns a Change only on a real transition."""
     prev.name, prev.group, prev.last_detail = row.name, row.group, row.detail
     _record_check(conn, node_id, row, ts)
     _record_rollup(conn, node_id, row, ts)
-    flagged = row.service_id in intentional
+    flagged = row.service_id in ignored
 
     if row.status != "down":
         prev.fails = 0
@@ -184,7 +184,7 @@ def _advance(conn, node_id: str, row: Row, prev: StoredState, ts: int,
 
 
 def _sweep_absent(conn, node_id: str, states: dict[str, StoredState], seen: set[str],
-                  ts: int, intentional: set[str]) -> list[Change]:
+                  ts: int, ignored: set[str]) -> list[Change]:
     """I2 — vanished is not healthy. Reaching this point guarantees a non-empty payload (I3)."""
     changes: list[Change] = []
     for sid, prev in states.items():
@@ -198,7 +198,7 @@ def _sweep_absent(conn, node_id: str, states: dict[str, StoredState], seen: set[
             ghost_prev.state, ghost_prev.since_ts = "down", ts
             _open_incident(conn, node_id, ghost, ts)
             changes.append(Change(node_id, sid, ghost.name, ghost.group, prev.state, "down",
-                                  VANISHED_DETAIL, ts, sid in intentional))
+                                  VANISHED_DETAIL, ts, sid in ignored))
         _save_state(conn, node_id, ghost, ghost_prev)
     return changes
 
@@ -216,7 +216,7 @@ def apply_wave(path, node_id: str, rows: list[Row], ts: int | None = None) -> li
         log.warning("empty payload: skipping wave entirely (invariant I3)")
         return []
 
-    intentional = set(db.flags(path, node_id)[1])
+    ignored = set(db.ignored_ids(path, node_id))
     states = load_states(path, node_id)
     changes: list[Change] = []
     seen: set[str] = set()
@@ -225,17 +225,17 @@ def apply_wave(path, node_id: str, rows: list[Row], ts: int | None = None) -> li
         for row in rows:
             seen.add(row.service_id)
             prev = states.get(row.service_id)
-            change = (_seed_new(conn, node_id, row, ts, intentional) if prev is None
-                      else _advance(conn, node_id, row, prev, ts, intentional))
+            change = (_seed_new(conn, node_id, row, ts, ignored) if prev is None
+                      else _advance(conn, node_id, row, prev, ts, ignored))
             if change is not None:
                 changes.append(change)
-        changes.extend(_sweep_absent(conn, node_id, states, seen, ts, intentional))
+        changes.extend(_sweep_absent(conn, node_id, states, seen, ts, ignored))
 
     return changes
 
 
 def uptime(path, node_id: str, days: int = 30) -> dict[str, float]:
-    """Percentage of healthy samples per service, excluding intentional ones (I5).
+    """Percentage of healthy samples per service, excluding ignored ones (I5).
 
     Degraded counts as half: a service that answers but is unwell is not the same as one that
     answers cleanly, and it is not the same as an outage either.
@@ -244,9 +244,9 @@ def uptime(path, node_id: str, days: int = 30) -> dict[str, float]:
 
 
 def uptime_rows(path, node_id: str, days: int = 30) -> list[dict]:
-    """Per-service uptime rows for the History tab, worst first. Intentional services excluded (I5)."""
+    """Per-service uptime rows for the History tab, worst first. Ignored services excluded (I5)."""
     since = int(time.time()) - days * 86400
-    skip = set(db.flags(path, node_id)[1])
+    skip = set(db.ignored_ids(path, node_id))
     with db.connect(path) as conn:
         rows = conn.execute(
             "SELECT r.service_id, SUM(r.up_n), SUM(r.deg_n), SUM(r.down_n), "
@@ -280,9 +280,9 @@ def uptime_rows(path, node_id: str, days: int = 30) -> list[dict]:
 
 
 def mttr(path, node_id: str, days: int = 30) -> dict[str, float]:
-    """Mean seconds to recover per service, intentional services excluded (I5)."""
+    """Mean seconds to recover per service, ignored services excluded (I5)."""
     since = int(time.time()) - days * 86400
-    skip = set(db.flags(path, node_id)[1])
+    skip = set(db.ignored_ids(path, node_id))
     with db.connect(path) as conn:
         rows = conn.execute(
             "SELECT service_id, AVG(ended_ts - started_ts), COUNT(*) FROM incidents "
@@ -309,9 +309,8 @@ def open_incidents(path, node_id: str) -> list[dict]:
 def recent_incidents(path, node_id: str, days: int = 30, limit: int = 100) -> list[dict]:
     """Incident log for the History tab, with both flags resolved at read time (I6)."""
     since = int(time.time()) - days * 86400
-    ignored_ids, intentional_ids = db.flags(path, node_id)
-    ignored = set(ignored_ids)
-    skip = set(intentional_ids)
+    ignored = set(db.ignored_ids(path, node_id))
+    skip = ignored
     with db.connect(path) as conn:
         rows = conn.execute(
             "SELECT id, service_id, name, grp, started_ts, ended_ts, last_detail FROM incidents "
@@ -328,7 +327,6 @@ def recent_incidents(path, node_id: str, days: int = 30, limit: int = 100) -> li
             "id": r[0], "service_id": sid, "name": r[2], "group": r[3],
             "started_ts": r[4], "ended_ts": ended, "ongoing": ended is None,
             "duration_s": (ended or now) - r[4], "detail": r[6],
-            "intentional": sid in skip,
             "ignored": sid in ignored,
         })
     return out
