@@ -2533,8 +2533,10 @@
 
         if (!('serviceWorker' in navigator)) return;
 
-        navigator.serviceWorker.register('/status/sw.js', { scope: '/status/' }).catch(() => {
-          navigator.serviceWorker.register('sw.js').catch(() => {});
+        // Register relative to wherever this is mounted, so the app works at / and behind
+        // a /status/ prefix without a wasted 404 on every load.
+        navigator.serviceWorker.register('sw.js', { scope: './' }).catch(() => {
+          navigator.serviceWorker.register('/status/sw.js', { scope: '/status/' }).catch(() => {});
         });
       }
 
