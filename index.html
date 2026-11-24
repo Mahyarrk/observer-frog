@@ -1765,7 +1765,7 @@
 
     <!-- Footer -->
     <footer class="footer">
-      <div>ENDPOINT: GET <span id="brand-endpoint">/api/status</span> &bull; INTERVAL: <span id="brand-interval">30s</span></div>
+      <div>ENDPOINT: GET <span id="brand-endpoint">/api/status</span> &bull; INTERVAL: <span id="brand-interval">30s</span> &bull; <span id="build-tag">build</span></div>
       <div class="pwa-badge">
         <span id="pwa-mode-indicator">PWA READY</span>
       </div>
@@ -1785,10 +1785,15 @@
         if (portEl) portEl.textContent = 'PORT ' + (window.location.port || (window.location.protocol === 'https:' ? '443' : '80'));
         const epEl = document.getElementById('brand-endpoint');
         if (epEl) epEl.textContent = (API_BASE || '') + '/api/status';
+        const buildEl = document.getElementById('build-tag');
+        if (buildEl) buildEl.textContent = 'build ' + BUILD;
       })();
       const API_ENDPOINT = API_BASE + '/api/status';
       const POLL_ENDPOINT = API_BASE + '/api/poll';
       const POLL_INTERVAL_SEC = 30;
+      // Bump on every shell change. Shown in the footer so a stale service-worker can be
+      // diagnosed by looking, instead of guessing whether the phone got the new code.
+      const BUILD = 'of-3';
       const STORAGE_KEY = 'observerfrog_status_cache_v1';
       const HISTORY_STORAGE_KEY = 'observerfrog_rolling_history_v1';
       const IGNORED_STORAGE_KEY = 'observerfrog_ignored_services_v1';
