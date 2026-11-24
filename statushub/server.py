@@ -28,6 +28,10 @@ STATIC_FILES = {
     "/sw.js": ("sw.js", "application/javascript; charset=utf-8"),
     "/manifest.json": ("manifest.json", "application/manifest+json; charset=utf-8"),
     "/icons/icon-32.png": ("icons/icon-32.png", "image/png"),
+    # iOS probes these root paths itself when adding to the home screen
+    "/apple-touch-icon.png": ("icons/icon-180.png", "image/png"),
+    "/apple-touch-icon-precomposed.png": ("icons/icon-180.png", "image/png"),
+    "/favicon.ico": ("icons/icon-32.png", "image/png"),
     "/icons/icon-180.png": ("icons/icon-180.png", "image/png"),
     "/icons/icon-192.png": ("icons/icon-192.png", "image/png"),
     "/icons/icon-512.png": ("icons/icon-512.png", "image/png"),
