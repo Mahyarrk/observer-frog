@@ -66,6 +66,45 @@ def cmd_add(cfg: Config, entries, cid: str, host: str, port: int | None, instanc
     return 0
 
 
+def cmd_metrics(cfg: Config) -> int:
+    """One-shot local metrics, for a quick check and for debugging the collector."""
+    from . import metrics
+    card = metrics.device_card(cfg.node_id, cfg.node_name)
+    print(f"{card['name']}  ({card['kind']})  {card['detail']}")
+    print(f"  cpu      {card.get('cpu_pct')}%   uptime {card.get('uptime_h')} h")
+    print(f"  memory   {card.get('mem_used_str') or 'n/a'}  ({card.get('mem_pct')}%)")
+    if card.get("swap_used") is not None:
+        print(f"  swap     {card['swap_used']} MB")
+    if card.get("disk_used"):
+        print(f"  disk     {card['disk_used']}")
+    if card.get("thermal"):
+        print(f"  thermal  {card['thermal']}")
+    if card.get("temp_c") is not None:
+        print(f"  temp     {card['temp_c']} °C")
+    return 0
+
+
+def cmd_serve(cfg: Config, args) -> int:
+    from . import runtime
+
+    runtime.setup_logging(verbose=getattr(args, "verbose", False))
+    bind = getattr(args, "bind", None)
+    port = getattr(args, "port", None)
+    if bind or port:
+        from dataclasses import replace
+        cfg = replace(cfg, bind=bind or cfg.bind, port=port or cfg.port)
+    cert, key = getattr(args, "tls_cert", None), getattr(args, "tls_key", None)
+    if bool(cert) != bool(key):
+        print("--tls-cert and --tls-key must be given together", file=sys.stderr)
+        return 2
+    if cfg.bind not in ("127.0.0.1", "localhost", "::1"):
+        print(f"binding {cfg.bind}: this is reachable from your network. "
+              f"Put it behind your proxy or a VPN.", file=sys.stderr)
+    db.init(cfg.db_path)
+    runtime.run(cfg, tls_cert=cert, tls_key=key)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="observer-frog", description="status dashboard for your machines")
     ap.add_argument("--config", help="path to config.toml")
@@ -80,6 +119,13 @@ def main(argv: list[str] | None = None) -> int:
     p_add.add_argument("--host", default="127.0.0.1")
     p_add.add_argument("--port", type=int, default=None, help="override the default port")
     p_add.add_argument("--instance", default="", help="suffix for a second copy, e.g. 2")
+    p_serve = sub.add_parser("serve", help="start the dashboard (the default when no command is given)")
+    p_serve.add_argument("--bind", help="address to bind (default from config; loopback unless set)")
+    p_serve.add_argument("--port", type=int, help="port to bind")
+    p_serve.add_argument("--tls-cert", help="PEM certificate; requires --tls-key")
+    p_serve.add_argument("--tls-key", help="PEM private key; requires --tls-cert")
+    p_serve.add_argument("-v", "--verbose", action="store_true", help="debug logging")
+    p_stat = sub.add_parser("metrics", help="print this machine's status line (no server)")
     args = ap.parse_args(argv)
 
     try:
@@ -95,6 +141,10 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_catalog(entries, args.query)
     if args.cmd == "add":
         return cmd_add(cfg, entries, args.id, args.host, args.port, args.instance)
+    if args.cmd == "metrics":
+        return cmd_metrics(cfg)
+    if args.cmd == "serve" or args.cmd is None:
+        return cmd_serve(cfg, args)
     return cmd_status(cfg)
 
 

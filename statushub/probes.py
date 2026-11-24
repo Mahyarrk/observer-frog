@@ -60,8 +60,13 @@ def probe_http(url: str, expect_status: int = 0, contains: str = "", timeout: fl
             ms = int((time.time() - t0) * 1000)
             if expect_status and code != expect_status:
                 return _result(STATE_DEGRADED, f"HTTP {code} (wanted {expect_status})", ms)
-            if contains and contains not in resp.read(200_000).decode("utf-8", "replace"):
-                return _result(STATE_DEGRADED, f"HTTP {code} (signature missing)", ms)
+            if contains:
+                # The signature may live in the body OR in the final URL: a service that
+                # redirects to /dashboard identifies itself in the redirect, not the HTML.
+                body = resp.read(200_000).decode("utf-8", "replace")
+                haystack = f"{resp.geturl()}\n{body}".lower()
+                if contains.lower() not in haystack:
+                    return _result(STATE_DEGRADED, f"HTTP {code} (signature missing)", ms)
             return _result(STATE_UP, f"HTTP {code}", ms)
     except urllib.error.HTTPError as e:
         ms = int((time.time() - t0) * 1000)
