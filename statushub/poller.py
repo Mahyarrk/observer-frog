@@ -20,12 +20,18 @@ MAX_WORKERS = 12          # bounded: one hung LAN target must not consume the wa
 WAVE_BUDGET_FRACTION = 0.8  # a wave must finish inside 80% of the interval to count
 
 
+def _self_exclusions() -> set[int]:
+    """Alias kept for the poller's import path; the logic lives in probes."""
+    return probes.self_exclusions()
+
+
 class Snapshot:
     """Start-of-wave process table, so N services cost one scan instead of N scans."""
 
     def __init__(self):
         self.rows: list[tuple[str, str, float]] = []   # (pid, cmdline_lower, rss_mb)
         self.ok = False
+        self.excluded = _self_exclusions()
         self._reload()
 
     def _reload(self):
@@ -36,6 +42,8 @@ class Snapshot:
         rows = []
         for proc in psutil.process_iter(["cmdline", "name", "memory_info"]):
             try:
+                if proc.info.get("pid") in self.excluded or proc.pid in self.excluded:
+                    continue
                 info = proc.info
                 cmd = " ".join(info.get("cmdline") or []) or (info.get("name") or "")
                 mem = info.get("memory_info")

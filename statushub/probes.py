@@ -112,6 +112,23 @@ def probe_tcp(target: str, timeout: float = 1.5) -> tuple[str, str, int]:
 
 # ---------------------------------------------------------------- process
 
+def self_exclusions() -> set[int]:
+    """PIDs that must never satisfy a process match: this process and every ancestor.
+
+    Without this, probing "docker" from a shell whose command line contains the word matches the
+    shell itself — every service reads `up` forever, including dead ones.
+    """
+    import os
+    exclude = {os.getpid(), os.getppid()}
+    try:
+        import psutil
+        for parent in psutil.Process().parents():
+            exclude.add(parent.pid)
+    except Exception:
+        pass
+    return exclude
+
+
 def probe_process(pattern: str) -> tuple[str, str, int]:
     """Match a cmdline substring. Best-effort by nature: a hung process still reads present."""
     try:
@@ -119,10 +136,13 @@ def probe_process(pattern: str) -> tuple[str, str, int]:
     except ImportError:
         return _result(STATE_UNAVAILABLE, "psutil not installed", 0)
     t0 = time.time()
+    excluded = self_exclusions()
     try:
         needle = pattern.lower()
         for proc in psutil.process_iter(["cmdline", "name"]):
             try:
+                if proc.pid in excluded:
+                    continue
                 cmd = " ".join(proc.info.get("cmdline") or []) or (proc.info.get("name") or "")
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 continue
