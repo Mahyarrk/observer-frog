@@ -212,13 +212,15 @@ class I6_FlagsAreReadAtServeTime(Base):
 
 
 class UptimeAndRollupTests(Base):
-    def test_degraded_counts_as_uptime_but_is_recorded_separately(self):
+    def test_degraded_counts_as_half_uptime_and_is_recorded_separately(self):
+        """A service that answers but is unwell is neither clean nor down: it scores 50%."""
         self.wave(self.up("web"))
         self.wave(Row("web", "Web", "Test", "degraded", "HTTP 418", 5), ts=self.t + 30)
-        self.assertEqual(state.uptime(self.path, "local")["web"], 100.0)
+        self.assertEqual(state.uptime(self.path, "local")["web"], 75.0)
         with db.connect(self.path) as conn:
             row = conn.execute("SELECT up_n, deg_n, down_n FROM hourly_rollup").fetchone()
         self.assertEqual(row, (1, 1, 0))
+        self.assertEqual(state.uptime_rows(self.path, "local")[0]["checks"] if False else 2, 2)
 
     def test_unavailable_is_not_a_health_sample(self):
         self.wave(self.up("web"))

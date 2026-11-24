@@ -27,6 +27,7 @@ STATIC_FILES = {
     "/index.html": ("index.html", "text/html; charset=utf-8"),
     "/sw.js": ("sw.js", "application/javascript; charset=utf-8"),
     "/manifest.json": ("manifest.json", "application/manifest+json; charset=utf-8"),
+    "/icons/icon-32.png": ("icons/icon-32.png", "image/png"),
     "/icons/icon-180.png": ("icons/icon-180.png", "image/png"),
     "/icons/icon-192.png": ("icons/icon-192.png", "image/png"),
     "/icons/icon-512.png": ("icons/icon-512.png", "image/png"),
@@ -265,24 +266,46 @@ def make_handler(app: App):
 
 
 def build_history(app: App, days: int = 30) -> dict:
-    """The `/api/history` shape: incidents, uptime and headline KPIs."""
+    """The `/api/history` contract the UI reads: incidents list, uptime rows, and KPIs.
+
+    KPI naming follows the original implementation (`ongoing_real`/`intentional_ongoing`), because
+    the frontend renders those keys and silently showed zero when they were absent.
+
+    Two independent flags, two independent rules — do not conflate them:
+      - `ignored` (silenced by choice) drives the red/amber split: red = problems you have not
+        acknowledged, amber = problems you have silenced but that are still down.
+      - `intentional` (meant to be off) is a different question entirely and only affects
+        uptime/MTTR: a deliberately-off service must not drag worst-uptime down (I5).
+    """
     now = int(time.time())
     incidents = state.recent_incidents(app.cfg.db_path, app.cfg.node_id, days=days)
-    uptime = state.uptime(app.cfg.db_path, app.cfg.node_id, days=days)
-    mttr = state.mttr(app.cfg.db_path, app.cfg.node_id, days=days)
-    skip = set(db.flags(app.cfg.db_path, app.cfg.node_id)[1])
-    recent = [i for i in incidents if not i["intentional"]]
+    rows = state.uptime_rows(app.cfg.db_path, app.cfg.node_id, days=days)
+
+    unacknowledged = [i for i in incidents if not i["ignored"]]
+    closed_real = [i for i in unacknowledged if not i["ongoing"]]
+
     kpi = {
-        "incidents_nd": len(recent),
-        "ongoing": len([i for i in incidents if i["ongoing"]]),
-        "worst_uptime": round(min(uptime.values()), 2) if uptime else None,
-        "worst_service": min(uptime, key=lambda k: uptime[k]) if uptime else None,
-        "mean_mttr_s": round(sum(mttr.values()) / len(mttr), 0) if mttr else None,
-        "services_counted": len(uptime),
-        "excluded_intentional": sorted(skip),
+        "incidents_30d": len(incidents),
+        "incidents_real": len(unacknowledged),
+        "incidents_ignored": len(incidents) - len(unacknowledged),
+        "ongoing": sum(1 for i in incidents if i["ongoing"]),
+        "ongoing_real": sum(1 for i in unacknowledged if i["ongoing"]),
+        "ongoing_ignored": sum(1 for i in incidents if i["ongoing"] and i["ignored"]),
+        # informational only: how many logged incidents are deliberately-off services
+        "intentional": sum(1 for i in incidents if i["intentional"]),
+        "services_affected": len({i["service_id"] for i in unacknowledged}),
+        # MTTR only means something with a sample; report n so the UI can say "no recoveries yet"
+        "mttr_s": int(sum(i["duration_s"] for i in closed_real) / len(closed_real)) if closed_real else None,
+        "mttr_n": len(closed_real),
+        # worst uptime excludes intentional services because uptime_rows() drops them (I5)
+        "worst_uptime": rows[0]["uptime_pct"] if rows else None,
+        "worst_service": rows[0]["name"] if rows else None,
+        "uptime_services": len(rows),
+        # intentional services are absent from the uptime table by design (I5); say how many
+        "uptime_excluded": len(set(db.flags(app.cfg.db_path, app.cfg.node_id)[1])),
     }
     return {"generated": now, "window_days": days, "incidents": incidents,
-            "uptime": uptime, "mttr": mttr, "kpi": kpi}
+            "uptime": rows, "kpi": kpi}
 
 
 def serve(cfg: Config, app: App | None = None, tls_cert: str | None = None,

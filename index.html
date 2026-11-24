@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-  <title>Status Hub • Node Monitor</title>
+  <title>Observer Frog • Node Monitor</title>
   <meta name="description" content="Local Server & Network Service Status Dashboard" />
 
   <!-- Theme & Strict iOS Standalone PWA Meta Tags -->
@@ -15,7 +15,7 @@
   <meta name="format-detection" content="telephone=no" />
 
   <!-- Embedded SVG Favicon & Fallback Apple Touch Icon (Replaced dynamically with Canvas PNG for strict iOS compliance) -->
-  <link id="favicon-link" rel="icon" type="image/png" sizes="192x192" href="./icons/icon-192.png" />
+  <link id="favicon-link" rel="icon" type="image/png" sizes="32x32" href="./icons/icon-32.png" />
   <link id="apple-touch-icon-link" rel="apple-touch-icon" sizes="180x180" href="./icons/icon-180.png" />
 
   <!-- Embedded Web App Manifest (Data URI) -->
@@ -396,7 +396,8 @@
       color: var(--text-muted);
       margin-top: 0.15rem;
       min-height: 0.75rem;
-      white-space: nowrap;
+      white-space: normal;
+      overflow-wrap: anywhere;
       overflow: hidden;
       text-overflow: ellipsis;
     }
@@ -450,6 +451,7 @@
     }
 
     .history-table-wrap {
+      -webkit-overflow-scrolling: touch;
       background: var(--bg-card);
       border: 1px solid var(--border-subtle);
       border-radius: var(--r-md);
@@ -460,6 +462,13 @@
       width: 100%;
       border-collapse: collapse;
       font-size: var(--t-meta);
+    }
+
+    /* On a phone, drop the columns you can live without rather than forcing a sideways scroll.
+       Everything is still in the DOM and reappears on a wide screen. */
+    @media (max-width: 640px) {
+      .history-table .col-optional { display: none; }
+      .history-table th, .history-table td { padding-left: 0.45rem; padding-right: 0.45rem; }
     }
 
     .history-table th {
@@ -484,6 +493,20 @@
 
     .inc-ongoing { color: #fca5a5; font-weight: 700; }
     .inc-closed { color: var(--text-muted); }
+
+    .stamp-ignored {
+      font-family: var(--font-mono);
+      font-size: var(--t-label);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--warn-color);
+      border: 1px solid rgba(245, 158, 11, 0.4);
+      background: rgba(245, 158, 11, 0.12);
+      border-radius: var(--r-xs);
+      padding: 0.05rem 0.3rem;
+      margin-left: 0.25rem;
+      white-space: nowrap;
+    }
 
     .stamp-intended {
       font-family: var(--font-mono);
@@ -1576,14 +1599,23 @@
       <div class="header-top-row">
         <div class="header-brand">
           <div class="brand-logo" aria-hidden="true">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-              <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+            <!-- the frog: two eyes on a wide head, the same mark as the app icon -->
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+              <circle cx="7.4" cy="8.6" r="3.5" fill="currentColor"/>
+              <circle cx="16.6" cy="8.6" r="3.5" fill="currentColor"/>
+              <ellipse cx="12" cy="15" rx="8.6" ry="6.6" fill="currentColor"/>
+              <circle cx="7.4" cy="8.6" r="2.5" fill="#e9f3eb"/>
+              <circle cx="16.6" cy="8.6" r="2.5" fill="#e9f3eb"/>
+              <circle cx="7.4" cy="8.8" r="1.25" fill="#0b1329"/>
+              <circle cx="16.6" cy="8.8" r="1.25" fill="#0b1329"/>
+              <path d="M6.2 15.6c1.6 2.1 4 3.2 5.8 3.2s4.2-1.1 5.8-3.2"
+                    stroke="#0b1329" stroke-width="1.7" stroke-linecap="round" fill="none"/>
             </svg>
             <span class="brand-live-dot"></span>
           </div>
           <div class="brand-info">
             <div class="brand-title-wrap">
-              <h1 class="brand-title">Status Hub</h1>
+              <h1 class="brand-title">Observer Frog</h1>
               <span class="live-api-badge">LIVE API</span>
             </div>
             <div class="brand-url" id="brand-url">connecting…</div>
@@ -1701,9 +1733,9 @@
             <tr>
               <th>Service</th>
               <th>Down at</th>
-              <th>Back at</th>
+              <th class="col-optional">Back at</th>
               <th>Duration</th>
-              <th>Last detail</th>
+              <th class="col-optional">Last detail</th>
             </tr>
           </thead>
           <tbody id="history-incident-body">
@@ -1718,9 +1750,9 @@
           <thead>
             <tr>
               <th>Service</th>
-              <th>Group</th>
+              <th class="col-optional">Group</th>
               <th>Uptime</th>
-              <th>Checks</th>
+              <th class="col-optional">Checks</th>
               <th>Failed</th>
             </tr>
           </thead>
@@ -2626,18 +2658,19 @@
 
         const kpi = historyData.kpi || {};
         const set = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
-        // Counts read "real + intentional": red is breakage, amber is what you chose
-        // to switch off. Two colours in one number beats a footnote you'd have to read.
-        const countHtml = (real, intent) => {
+        // Counts read "unacknowledged + ignored": red is a problem you still need to deal
+        // with, amber is one you silenced that is nonetheless still down. Intentional
+        // (meant-to-be-off) is a separate flag and does not enter this counter at all.
+        const countHtml = (real, ignored) => {
           const r = Number(real) || 0;
-          const i = Number(intent) || 0;
+          const i = Number(ignored) || 0;
           if (!i) return `<span class="num-real">${r}</span>`;
           return `<span class="num-real">${r}</span><span class="num-sep">+</span><span class="num-intent">${i}</span>`;
         };
         const setHtml = (id, html) => { const e = document.getElementById(id); if (e) e.innerHTML = html; };
 
-        setHtml('h-kpi-incidents', countHtml(kpi.incidents_real, kpi.intentional));
-        setHtml('h-kpi-ongoing', countHtml(kpi.ongoing_real, kpi.intentional_ongoing));
+        setHtml('h-kpi-incidents', countHtml(kpi.incidents_real, kpi.incidents_ignored));
+        setHtml('h-kpi-ongoing', countHtml(kpi.ongoing_real, kpi.ongoing_ignored));
         set('h-kpi-worst', (kpi.worst_uptime != null ? Number(kpi.worst_uptime).toFixed(2) + '%' : '—'));
 
         set('h-kpi-incidents-sub', '');
@@ -2645,7 +2678,13 @@
         const mttrUsable = kpi.mttr_n > 0 && kpi.mttr_s != null;
         set('h-kpi-mttr', mttrUsable ? fmtDur(kpi.mttr_s) : '—');
         set('h-kpi-mttr-sub', mttrUsable ? `n=${kpi.mttr_n} recovered` : 'no recoveries yet');
-        set('h-kpi-worst-sub', kpi.uptime_services ? `${kpi.uptime_services} services tracked` : '');
+        const excluded = Number(kpi.uptime_excluded) || 0;
+        set('h-kpi-ongoing-sub', kpi.ongoing_ignored
+          ? 'amber = ignored' : '');
+        set('h-kpi-worst-sub', kpi.uptime_services
+          ? `${kpi.uptime_services} tracked` +
+            (excluded > 0 ? ` · ${excluded} excluded` : '')
+          : '');
 
         if (elHistoryBadge) {
           elHistoryBadge.textContent = kpi.ongoing ? String(kpi.ongoing) + ' LIVE' : String(kpi.incidents_30d || 0);
@@ -2670,11 +2709,13 @@
               ? '<span class="inc-ongoing">ONGOING</span>'
               : '<span class="inc-closed">recovered</span>';
             return '<tr>' +
-              '<td><strong>' + escapeHtml(i.name) + '</strong>' + (i.intentional ? ' <span class="stamp-intended">intended</span>' : '') + '<br><span style="color: var(--text-muted); font-size: var(--t-label);">' + escapeHtml(i.group || '') + '</span></td>' +
+              '<td><strong>' + escapeHtml(i.name) + '</strong>' +
+              (i.ignored ? ' <span class="stamp-ignored">ignored</span>' : '') +
+              (i.intentional ? ' <span class="stamp-intended">intended</span>' : '') + '<br><span style="color: var(--text-muted); font-size: var(--t-label);">' + escapeHtml(i.group || '') + '</span></td>' +
               '<td>' + fmtAbs(i.started_ts) + '</td>' +
-              '<td>' + (i.ongoing ? state : fmtAbs(i.ended_ts)) + '</td>' +
+              '<td class="col-optional">' + (i.ongoing ? state : fmtAbs(i.ended_ts)) + '</td>' +
               '<td style="font-family: var(--font-mono);">' + fmtDur(i.duration_s) + '</td>' +
-              '<td style="color: var(--text-muted); font-size: var(--t-meta);">' + escapeHtml(i.detail || '') + '</td>' +
+              '<td class="col-optional" style="color: var(--text-muted); font-size: var(--t-meta);">' + escapeHtml(i.detail || '') + '</td>' +
               '</tr>';
           }).join('');
         }
@@ -2688,10 +2729,10 @@
             const cls = pct >= 99.5 ? '' : (pct >= 95 ? ' warn' : ' bad');
             return '<tr>' +
               '<td><strong>' + escapeHtml(u.name) + '</strong></td>' +
-              '<td style="color: var(--text-muted); font-size: var(--t-meta);">' + escapeHtml(u.group || '') + '</td>' +
+              '<td class="col-optional" style="color: var(--text-muted); font-size: var(--t-meta);">' + escapeHtml(u.group || '') + '</td>' +
               '<td><div style="display:flex; align-items:center; gap:0.5rem;"><div class="uptime-bar' + cls + '"><span style="width:' + Math.max(2, Math.min(100, pct)) + '%;"></span></div>' +
               '<span style="font-family: var(--font-mono); white-space:nowrap;">' + pct.toFixed(2) + '%</span></div></td>' +
-              '<td style="font-family: var(--font-mono); color: var(--text-muted);">' + (u.checks || 0) + '</td>' +
+              '<td class="col-optional" style="font-family: var(--font-mono); color: var(--text-muted);">' + (u.checks || 0) + '</td>' +
               '<td style="font-family: var(--font-mono); color: ' + (u.down_checks ? '#fca5a5' : 'var(--text-muted)') + ';">' + (u.down_checks || 0) + '</td>' +
               '</tr>';
           }).join('');

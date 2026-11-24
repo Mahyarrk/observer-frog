@@ -235,20 +235,47 @@ def apply_wave(path, node_id: str, rows: list[Row], ts: int | None = None) -> li
 
 
 def uptime(path, node_id: str, days: int = 30) -> dict[str, float]:
-    """Percentage of healthy samples per service, excluding intentional ones (I5)."""
+    """Percentage of healthy samples per service, excluding intentional ones (I5).
+
+    Degraded counts as half: a service that answers but is unwell is not the same as one that
+    answers cleanly, and it is not the same as an outage either.
+    """
+    return {row["service_id"]: row["uptime_pct"] for row in uptime_rows(path, node_id, days)}
+
+
+def uptime_rows(path, node_id: str, days: int = 30) -> list[dict]:
+    """Per-service uptime rows for the History tab, worst first. Intentional services excluded (I5)."""
     since = int(time.time()) - days * 86400
     skip = set(db.flags(path, node_id)[1])
     with db.connect(path) as conn:
         rows = conn.execute(
-            "SELECT service_id, SUM(up_n), SUM(deg_n), SUM(down_n) FROM hourly_rollup "
-            "WHERE node_id = ? AND hour_ts >= ? GROUP BY service_id", (node_id, since),
+            "SELECT r.service_id, SUM(r.up_n), SUM(r.deg_n), SUM(r.down_n), "
+            "  (SELECT s.name FROM service_state s "
+            "    WHERE s.node_id = r.node_id AND s.service_id = r.service_id), "
+            "  (SELECT s.grp FROM service_state s "
+            "    WHERE s.node_id = r.node_id AND s.service_id = r.service_id) "
+            "FROM hourly_rollup r WHERE r.node_id = ? AND r.hour_ts >= ? "
+            "GROUP BY r.service_id",
+            (node_id, since),
         ).fetchall()
-    out: dict[str, float] = {}
-    for sid, up_n, deg_n, down_n in rows:
+
+    out = []
+    for sid, up_n, deg_n, down_n, name, grp in rows:
         if sid in skip:
             continue
         total = (up_n or 0) + (deg_n or 0) + (down_n or 0)
-        out[sid] = round(100.0 * ((up_n or 0) + (deg_n or 0)) / total, 2) if total else 0.0
+        if not total:
+            continue
+        pct = 100.0 * ((up_n or 0) + 0.5 * (deg_n or 0)) / total
+        out.append({
+            "service_id": sid,
+            "name": name or sid,
+            "group": grp or "",
+            "uptime_pct": round(pct, 2),
+            "checks": total,
+            "down_checks": down_n or 0,
+        })
+    out.sort(key=lambda u: (u["uptime_pct"], u["name"]))
     return out
 
 
@@ -280,12 +307,16 @@ def open_incidents(path, node_id: str) -> list[dict]:
 
 
 def recent_incidents(path, node_id: str, days: int = 30, limit: int = 100) -> list[dict]:
+    """Incident log for the History tab, with both flags resolved at read time (I6)."""
     since = int(time.time()) - days * 86400
-    skip = set(db.flags(path, node_id)[1])
+    ignored_ids, intentional_ids = db.flags(path, node_id)
+    ignored = set(ignored_ids)
+    skip = set(intentional_ids)
     with db.connect(path) as conn:
         rows = conn.execute(
             "SELECT id, service_id, name, grp, started_ts, ended_ts, last_detail FROM incidents "
-            "WHERE node_id = ? AND started_ts >= ? ORDER BY started_ts DESC LIMIT ?",
+            "WHERE node_id = ? AND (ended_ts IS NULL OR ended_ts >= ?) "
+            "ORDER BY started_ts DESC LIMIT ?",
             (node_id, since, limit),
         ).fetchall()
     now = int(time.time())
@@ -298,5 +329,6 @@ def recent_incidents(path, node_id: str, days: int = 30, limit: int = 100) -> li
             "started_ts": r[4], "ended_ts": ended, "ongoing": ended is None,
             "duration_s": (ended or now) - r[4], "detail": r[6],
             "intentional": sid in skip,
+            "ignored": sid in ignored,
         })
     return out
