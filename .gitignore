@@ -1,17 +1,57 @@
+# Local runtime state — never commit
 status.db
-status.db-wal
-status.db-shm
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# Key material and certificates (bring-your-own; nothing here belongs in git)
 certs/
-*.log
-config.local.toml
+*.pem
+*.key
+*.crt
+*.csr
+*.srl
+*.p12
+*.pfx
+
+# Real configuration: your topology, ports and token references
 config.toml
+config.local.toml
+*.local.toml
+config.example.toml.bak
+.env
+.env.*
+
+# Logs and dumps
+*.log
+*.bak
+
+# Verification artifacts (golden payloads describe a real machine's topology)
+golden/
+parity-*.jsonl
+parity-status.db*
+
+# Python
 __pycache__/
 *.pyc
+*.pyo
 .venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# Build output
 dist/
 build/
 *.spec
+*.tgz
+
+# Editors / OS
 .DS_Store
-config.example.toml.bak
-golden/
-parity-status.db*
+.idea/
+.vscode/
+*.swp
+

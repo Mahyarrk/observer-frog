@@ -1812,7 +1812,10 @@
         'Storage'
       ];
 
-      // Seed fallback matching the exact contract so first paint or offline preview is immediate
+      // First-paint placeholder. Deliberately empty: the previous version shipped the author's
+      // real service inventory (names, ports, tunnel addresses) as seed data, which is not
+      // something a public repository should contain. An empty seed renders the honest
+      // "nothing yet" state for the split second before the first fetch lands.
       const SEED_DATA = { timestamp: 0, services: [], history: {} };
 
       // State
