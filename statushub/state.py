@@ -138,6 +138,71 @@ def _record_rollup(conn, node_id: str, row: Row, ts: int) -> None:
     )
 
 
+def _seed_new(conn, node_id: str, row: Row, ts: int, intentional: set[str]) -> Change:
+    """I4 — a first sighting seeds silently, whatever state it arrives in."""
+    st = StoredState(state=row.status, fails=0, since_ts=ts, name=row.name,
+                     group=row.group, last_detail=row.detail)
+    _save_state(conn, node_id, row, st)
+    _record_check(conn, node_id, row, ts)
+    _record_rollup(conn, node_id, row, ts)
+    if row.status == "down":
+        _open_incident(conn, node_id, row, ts)
+    return Change(node_id, row.service_id, row.name, row.group, "new", row.status, row.detail,
+                  ts, row.service_id in intentional, first_sighting=True)
+
+
+def _advance(conn, node_id: str, row: Row, prev: StoredState, ts: int,
+             intentional: set[str]) -> Change | None:
+    """Apply one observation to an existing service. Returns a Change only on a real transition."""
+    prev.name, prev.group, prev.last_detail = row.name, row.group, row.detail
+    _record_check(conn, node_id, row, ts)
+    _record_rollup(conn, node_id, row, ts)
+    flagged = row.service_id in intentional
+
+    if row.status != "down":
+        prev.fails = 0
+        if prev.state == "down":                       # I1 — recovery is immediate
+            prev.state, prev.since_ts = row.status, ts
+            _close_incident(conn, node_id, row.service_id, ts, row.detail)
+            _save_state(conn, node_id, row, prev)
+            return Change(node_id, row.service_id, row.name, row.group, "down", row.status,
+                          row.detail, ts, flagged)
+        if prev.state in NEUTRAL and row.status in HEALTHY:
+            prev.state, prev.since_ts = row.status, ts
+        _save_state(conn, node_id, row, prev)
+        return None
+
+    prev.fails += 1
+    if prev.state != "down" and prev.fails >= DOWN_CONFIRM_POLLS:   # I1 — confirm before down
+        prev.state, prev.since_ts = "down", ts
+        _open_incident(conn, node_id, row, ts)
+        _save_state(conn, node_id, row, prev)
+        return Change(node_id, row.service_id, row.name, row.group, "up", "down",
+                      row.detail, ts, flagged)
+    _save_state(conn, node_id, row, prev)
+    return None
+
+
+def _sweep_absent(conn, node_id: str, states: dict[str, StoredState], seen: set[str],
+                  ts: int, intentional: set[str]) -> list[Change]:
+    """I2 — vanished is not healthy. Reaching this point guarantees a non-empty payload (I3)."""
+    changes: list[Change] = []
+    for sid, prev in states.items():
+        if sid in seen or prev.state == "down":
+            continue
+        ghost = Row(service_id=sid, name=prev.name or sid, group=prev.group,
+                    status="down", detail=VANISHED_DETAIL)
+        ghost_prev = StoredState(state=prev.state, fails=prev.fails + 1, since_ts=prev.since_ts,
+                                 name=prev.name, group=prev.group, last_detail=VANISHED_DETAIL)
+        if ghost_prev.fails >= min(DOWN_CONFIRM_POLLS, ABSENCE_CONFIRM_POLLS):
+            ghost_prev.state, ghost_prev.since_ts = "down", ts
+            _open_incident(conn, node_id, ghost, ts)
+            changes.append(Change(node_id, sid, ghost.name, ghost.group, prev.state, "down",
+                                  VANISHED_DETAIL, ts, sid in intentional))
+        _save_state(conn, node_id, ghost, ghost_prev)
+    return changes
+
+
 def apply_wave(path, node_id: str, rows: list[Row], ts: int | None = None) -> list[Change]:
     """Feed one poll wave through the machine. Returns the transitions worth notifying about.
 
@@ -160,68 +225,11 @@ def apply_wave(path, node_id: str, rows: list[Row], ts: int | None = None) -> li
         for row in rows:
             seen.add(row.service_id)
             prev = states.get(row.service_id)
-
-            # I4 — first sighting seeds silently, whatever it is
-            if prev is None:
-                st = StoredState(state=row.status, fails=0, since_ts=ts, name=row.name,
-                                 group=row.group, last_detail=row.detail)
-                _save_state(conn, node_id, row, st)
-                _record_check(conn, node_id, row, ts)
-                _record_rollup(conn, node_id, row, ts)
-                if row.status == "down":
-                    _open_incident(conn, node_id, row, ts)
-                changes.append(Change(node_id, row.service_id, row.name, row.group, "new",
-                                      row.status, row.detail, ts,
-                                      row.service_id in intentional, first_sighting=True))
-                continue
-
-            prev.state, prev.name, prev.group = prev.state, row.name, row.group
-            prev.last_detail = row.detail
-            _record_check(conn, node_id, row, ts)
-            _record_rollup(conn, node_id, row, ts)
-
-            if row.status == "down":
-                prev.fails += 1
-                # I1 — confirm before declaring down
-                if prev.state != "down" and prev.fails >= DOWN_CONFIRM_POLLS:
-                    prev.state = "down"
-                    prev.since_ts = ts
-                    _open_incident(conn, node_id, row, ts)
-                    changes.append(Change(node_id, row.service_id, row.name, row.group,
-                                          "up", "down", row.detail, ts,
-                                          row.service_id in intentional))
-            else:
-                # I1 — recovery is immediate
-                if prev.state == "down":
-                    prev.state = row.status
-                    prev.since_ts = ts
-                    _close_incident(conn, node_id, row.service_id, ts, row.detail)
-                    changes.append(Change(node_id, row.service_id, row.name, row.group,
-                                          "down", row.status, row.detail, ts,
-                                          row.service_id in intentional))
-                elif prev.state in NEUTRAL and row.status in HEALTHY:
-                    prev.state = row.status
-                    prev.since_ts = ts
-                prev.fails = 0
-
-            _save_state(conn, node_id, row, prev)
-
-        # I2 — vanished is not healthy, but only when the payload had something in it (I3)
-        for sid, prev in states.items():
-            if sid in seen or prev.state == "down":
-                continue
-            absent = min(DOWN_CONFIRM_POLLS, ABSENCE_CONFIRM_POLLS)
-            ghost = Row(service_id=sid, name=prev.name or sid, group=prev.group,
-                        status="down", detail=VANISHED_DETAIL)
-            ghost_prev = StoredState(state=prev.state, fails=prev.fails + 1, since_ts=prev.since_ts,
-                                     name=prev.name, group=prev.group, last_detail=VANISHED_DETAIL)
-            if ghost_prev.fails >= absent:
-                ghost_prev.state = "down"
-                ghost_prev.since_ts = ts
-                _open_incident(conn, node_id, ghost, ts)
-                changes.append(Change(node_id, sid, ghost.name, ghost.group, prev.state, "down",
-                                      VANISHED_DETAIL, ts, sid in intentional))
-            _save_state(conn, node_id, ghost, ghost_prev)
+            change = (_seed_new(conn, node_id, row, ts, intentional) if prev is None
+                      else _advance(conn, node_id, row, prev, ts, intentional))
+            if change is not None:
+                changes.append(change)
+        changes.extend(_sweep_absent(conn, node_id, states, seen, ts, intentional))
 
     return changes
 

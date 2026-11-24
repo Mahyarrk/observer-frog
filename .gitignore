@@ -12,3 +12,6 @@ dist/
 build/
 *.spec
 .DS_Store
+config.example.toml.bak
+golden/
+parity-status.db*

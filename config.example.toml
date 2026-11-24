@@ -1,0 +1,71 @@
+# Example configuration — copy to your config path, or start with no config at all.
+#
+# `statushub` with no config still serves this machine's metrics; services are opt-in.
+# Get a ready-made block for anything in the catalog with:  statushub add <id>
+
+poll_interval = 30          # seconds between probe waves
+# db_path = "~/.local/state/observer-frog/status.db"   # default per-platform; override if you like
+
+[node]
+id = "local"                # stable id; keep it if you ever add more nodes
+name = ""                   # blank = this machine's hostname
+
+[serve]
+enabled = true
+bind = "127.0.0.1"          # loopback. Use 0.0.0.0 only behind a proxy or VPN.
+port = 8770
+
+# ---------------------------------------------------------------- services
+# Five probe kinds. Delete what you do not need.
+
+[[service]]
+id = "9router"
+name = "9router"
+group = "Model Routing"
+probe = "http"
+target = "http://127.0.0.1:20128/"
+ports = "20128"
+contains = "/dashboard"     # signature: proves it is 9router, not just something on 20128
+
+[[service]]
+id = "syncthing"
+name = "Syncthing"
+group = "Sync"
+probe = "http"
+target = "http://127.0.0.1:8384/rest/noauth/health"
+ports = "8384"
+contains = "OK"
+
+[[service]]
+id = "postgres"
+name = "PostgreSQL"
+group = "Databases"
+probe = "tcp"
+target = "127.0.0.1:5432"
+ports = "5432"
+
+[[service]]
+id = "docker"
+name = "Docker"
+group = "Containers"
+probe = "process"
+target = "dockerd"
+
+# A periodic job: healthy means "ran recently", not "is running right now".
+[[service]]
+id = "nightly-backup"
+name = "Nightly Backup"
+group = "Jobs"
+probe = "file_age"
+target = "~/backups/.last-run"
+max_age_s = 129600          # 36 hours
+
+# ---------------------------------------------------------------- notifications
+# ntfy only in this version. Token comes from the environment, never the file.
+
+[[sink]]
+type = "ntfy"
+url = "https://ntfy.sh"     # or your self-hosted instance
+topic = "change-me"
+# token_env = "NTFY_TOKEN"
+# use_proxy = false          # leave false: the alerter must not depend on what it watches
