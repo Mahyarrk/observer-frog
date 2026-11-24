@@ -110,7 +110,8 @@ class InstantiateTests(unittest.TestCase):
     def test_catalog_covers_the_common_self_hosted_stack(self):
         """The catalog exists to spare people writing probes for everyday software."""
         ids = {e.id for e in self.entries}
-        for expected in ("nginx", "docker", "postgres", "grafana", "uptime-kuma"):
+        for expected in ("nginx", "syncthing", "docker", "postgres", "grafana",
+                         "uptime-kuma", "vaultwarden", "home-assistant"):
             self.assertIn(expected, ids, f"catalog cannot express {expected}")
 
     def test_instantiated_services_are_valid_config_services(self):

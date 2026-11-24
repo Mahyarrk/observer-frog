@@ -177,7 +177,7 @@ def network() -> dict:
 def device_card(node_id: str = "local", node_name: str | None = None) -> dict:
     """The `devices[]` entry for this machine, in the shape the UI already renders."""
     k = kind()
-    # Match the shape users already see: "Example CPU - macOS", "Example CPU - Debian 13".
+    # Shape: "<chip or CPU model> - <OS>", e.g. "Example CPU - Linux".
     detail_bits = [platform.processor() or platform.machine(), platform.system()]
     if platform.system() == "Darwin":
         detail_bits[0] = _mac_chip() or detail_bits[0]
