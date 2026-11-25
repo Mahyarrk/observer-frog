@@ -4,7 +4,9 @@
 //! operator of this repo. The templates live here, embedded, so a single downloaded binary
 //! carries everything it needs to become a service on the machine it lands on.
 //!
-//! Two roles, two unit names (`-head`, `-tail`): a machine can autostart either, or both.
+//! One unit name (`dev.observerfrog` / `observer-frog.service`), regardless of role. The role is a
+//! setting inside the config, not an identity: switching head↔tail must restart the service that is
+//! already installed, so the name has to stay put across the switch.
 //!
 //! Windows is not supported here. The metrics and config paths already know about Windows, but
 //! claiming a Task Scheduler integration we have never run is worse than saying plainly that
@@ -58,11 +60,54 @@ pub struct Plan {
     pub role: String,
 }
 
+/// The one service label for this node, whatever its role.
+pub const LABEL: &str = "dev.observerfrog";
+
 pub fn role_of(cfg: &config::Config) -> String {
     if cfg.serve {
         "head".to_string()
     } else {
         "tail".to_string()
+    }
+}
+
+/// Names used before the role stopped being part of the service identity.
+///
+/// Leaving one of these behind would keep a second copy running: it binds the same port, fails, and
+/// `KeepAlive`/`Restart=always` retries it forever. `install` retires them.
+fn legacy_units() -> Vec<PathBuf> {
+    ["head", "tail"]
+        .iter()
+        .filter_map(|r| unit_path_of(r).ok())
+        .filter(|p| p.exists())
+        .collect()
+}
+
+/// Retire a unit that exists on disk but must not run. Best effort: a failure here is reported, not
+/// fatal, because the new unit is what actually has to work.
+fn retire(path: &Path) {
+    if cfg!(target_os = "macos") {
+        let _ = std::process::Command::new("launchctl").arg("unload").arg("-w").arg(path).output();
+        let label = path.file_stem().and_then(|s| s.to_str()).unwrap_or_default();
+        if let Ok(o) = std::process::Command::new("id").arg("-u").output() {
+            let uid = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            let _ = std::process::Command::new("launchctl")
+                .args(["disable", &format!("gui/{uid}/{label}")])
+                .output();
+        }
+    } else {
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();
+        let _ = std::process::Command::new("systemctl")
+            .args(["--user", "disable", "--now", &name])
+            .output();
+        let _ = std::process::Command::new("systemctl")
+            .args(["--user", "daemon-reload"])
+            .output();
+    }
+    if let Err(e) = fs::remove_file(path) {
+        eprintln!("warning: cannot remove old unit {}: {e}", path.display());
+    } else {
+        println!("retired old unit {}", path.display());
     }
 }
 
@@ -82,7 +127,26 @@ fn cfg_is_windows() -> bool {
     cfg!(windows)
 }
 
-pub fn unit_path(role: &str) -> Result<PathBuf, String> {
+/// The unit for this node. `role` is accepted for the legacy sweep and ignored, so every call site
+/// keeps compiling and every caller lands on the same stable path.
+pub fn unit_path(_role: &str) -> Result<PathBuf, String> {
+    if !(cfg!(target_os = "macos") || cfg!(target_os = "linux")) {
+        return Err(format!(
+            "autostart is not implemented on {}; macOS and Linux only",
+            std::env::consts::OS
+        ));
+    }
+    let home = std::env::var("HOME").map_err(|_| "HOME is not set".to_string())?;
+    let home = PathBuf::from(home);
+    Ok(if cfg!(target_os = "macos") {
+        home.join(format!("Library/LaunchAgents/{LABEL}.plist"))
+    } else {
+        home.join(".config/systemd/user/observer-frog.service")
+    })
+}
+
+/// The old role-suffixed path, only so the sweep can find and retire it.
+fn unit_path_of(role: &str) -> Result<PathBuf, String> {
     if cfg!(target_os = "macos") {
         let home = std::env::var("HOME").map_err(|_| "HOME is not set".to_string())?;
         Ok(PathBuf::from(home)
@@ -94,10 +158,7 @@ pub fn unit_path(role: &str) -> Result<PathBuf, String> {
             .join(".config/systemd/user")
             .join(format!("observer-frog-{role}.service")))
     } else {
-        Err(format!(
-            "autostart is not implemented on {}; macOS and Linux only",
-            std::env::consts::OS
-        ))
+        Err(format!("autostart is not implemented on {}", std::env::consts::OS))
     }
 }
 
@@ -105,7 +166,7 @@ pub fn unit_path(role: &str) -> Result<PathBuf, String> {
 pub fn render(role: &str, binary: &Path, config_path: &Path, log_path: &Path) -> Result<String, String> {
     if cfg!(target_os = "macos") {
         Ok(LAUNCHD
-            .replace("{label}", &format!("dev.observerfrog.{role}"))
+            .replace("{label}", LABEL)
             .replace("{binary}", &binary.display().to_string())
             .replace("{config}", &config_path.display().to_string())
             .replace("{log}", &log_path.display().to_string()))
@@ -187,6 +248,11 @@ pub fn install(cfg: &config::Config, config_path: Option<&Path>) -> i32 {
     if let Err(e) = fs::write(&unit, body) {
         eprintln!("cannot write {}: {e}", unit.display());
         return 1;
+    }
+    for old in legacy_units() {
+        if old != unit {
+            retire(&old);
+        }
     }
 
     // The token must survive a reboot, and a service has no shell to read it from.
@@ -323,7 +389,7 @@ pub fn is_installed(cfg: &config::Config) -> bool {
         match out {
             Ok(o) => {
                 let text = String::from_utf8_lossy(&o.stdout);
-                !text.contains(&format!("\"dev.observerfrog.{role}\" => disabled"))
+                !text.contains(&format!("\"{LABEL}\" => disabled"))
             }
             Err(_) => true,
         }
@@ -360,7 +426,7 @@ pub fn set_enabled(cfg: &config::Config, on: bool) -> Result<String, String> {
             .and_then(|o| String::from_utf8(o.stdout).ok())
             .map(|s| s.trim().to_string())
             .unwrap_or_else(|| "501".into());
-        let target = format!("gui/{uid}/dev.observerfrog.{role}");
+        let target = format!("gui/{uid}/{LABEL}");
         // disable/enable only affect what happens at login; a running job is left alone.
         let o = std::process::Command::new("launchctl")
             .args([if on { "enable" } else { "disable" }, &target])
@@ -392,9 +458,44 @@ pub fn set_enabled(cfg: &config::Config, on: bool) -> Result<String, String> {
     }
 }
 
+/// Bounce the installed service so it picks up a new role from the config.
+///
+/// Switching head↔tail changes what the process does at startup (the silence sweeper is created
+/// from `serve`, and the poller's `report_to` is read at boot), so the change only takes effect on a
+/// fresh process. Doing it here rather than asking the operator to run a shell command is the whole
+/// point of the Settings switch: one click, and the node comes back in its new role.
+///
+/// Deliberately detached and delayed: the caller is usually the process being restarted, answering
+/// an HTTP request. If it restarted itself inline the reply would never reach the browser.
+pub fn restart_soon(delay_ms: u64) -> Result<(), String> {
+    let unit = unit_path("")?;
+    if !unit.exists() {
+        return Err("not installed — run `observer-frog install` once from a shell".into());
+    }
+    let script = if cfg!(target_os = "macos") {
+        // `kickstart -k` restarts the job in place, which is what a role change needs.
+        let uid = std::process::Command::new("id").arg("-u").output().ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_string())
+            .ok_or("cannot determine uid")?;
+        format!("sleep {:.1}; launchctl kickstart -k gui/{uid}/{LABEL}", delay_ms as f64 / 1000.0)
+    } else {
+        format!("sleep {:.1}; systemctl --user restart observer-frog.service", delay_ms as f64 / 1000.0)
+    };
+    std::process::Command::new("/bin/sh")
+        .arg("-c")
+        .arg(script)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("cannot schedule the restart: {e}"))
+}
+
 /// Whether the unit is currently running, so `enable` can start a stopped node.
-fn is_running(role: &str) -> bool {
-    let label = format!("dev.observerfrog.{role}");
+fn is_running(_role: &str) -> bool {
+    let label = LABEL;
     std::process::Command::new("launchctl")
         .arg("list")
         .output()
@@ -417,8 +518,18 @@ mod tests {
     }
 
     #[test]
-    fn the_two_roles_get_different_unit_names() {
-        assert_ne!(unit_path("head").unwrap(), unit_path("tail").unwrap());
+    fn the_unit_name_does_not_follow_the_role() {
+        // The role is a setting, not an identity: switching head↔tail restarts the unit that is
+        // already installed, so both roles must resolve to one path.
+        assert_eq!(unit_path("head").unwrap(), unit_path("tail").unwrap());
+        assert_eq!(unit_path("").unwrap(), unit_path("head").unwrap());
+    }
+
+    #[test]
+    fn the_old_role_suffixed_units_are_still_findable() {
+        // They have to be, or an upgrade leaves a second copy racing for the same port.
+        assert_ne!(unit_path_of("head").unwrap(), unit_path("head").unwrap());
+        assert!(unit_path_of("head").unwrap().to_string_lossy().contains("head"));
     }
 
     #[test]

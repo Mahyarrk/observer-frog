@@ -713,9 +713,21 @@ fn route(req: &Request, app: &Arc<App>) -> (u16, String, Vec<u8>, bool) {
             let body: Value = serde_json::from_slice(&req.body).unwrap_or(json!({}));
             let path = crate::settings::target(&app.cfg);
             match crate::settings::apply(&path, &body) {
-                Ok(changed) => (200, json_ct, json_bytes(&json!({
-                    "ok": true, "changed": changed, "path": path.display().to_string(),
-                })), false),
+                Ok(changed) => {
+                    // The role is read at startup, so a change only lands on a fresh process. The
+                    // page says "changed"; this makes it true, without the operator opening a shell.
+                    let restart = changed.iter().any(|k| k == "serve.enabled" || k == "report_to" || k == "serve.port" || k == "serve.bind");
+                    let mut note = Value::Null;
+                    if restart {
+                        note = match crate::install::restart_soon(1200) {
+                            Ok(_) => json!("restarting to apply the new role"),
+                            Err(e) => json!(format!("saved, but not restarted: {e}")),
+                        };
+                    }
+                    (200, json_ct, json_bytes(&json!({
+                        "ok": true, "changed": changed, "path": path.display().to_string(), "restart": note,
+                    })), false)
+                }
                 Err(e) => (500, json_ct, json_bytes(&json!({"ok": false, "error": e})), false),
             }
         }

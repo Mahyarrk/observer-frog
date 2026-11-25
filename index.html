@@ -3119,6 +3119,12 @@
           });
           const d = await r.json();
           if (!d.ok) { settingsNote(d.error || 'save failed'); return; }
+          if (d.restart) {
+            // The service restarts itself in a moment, so this page will lose its server. Say so
+            // instead of leaving the operator watching a dashboard that quietly stops answering.
+            settingsNote(okMsg + ' — ' + d.restart + ', reconnecting…');
+            return;
+          }
           settingsNote(okMsg + ' — applied on the next poll');
           await loadSettings();
         } catch (e) { settingsNote('save failed: ' + e); }
