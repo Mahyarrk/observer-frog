@@ -266,10 +266,13 @@ pub fn load(path: Option<&Path>) -> Result<Config, ConfigError> {
     // A tail with no explicit list asks the machine what it is running. A head does not: it
     // probes what the operator chose, and discovering on a head would silently add services the
     // operator never asked for.
-    let serve_enabled = serve_cfg
-        .and_then(|t| t.get("enabled"))
+    // Same resolution the `serve` field uses, so `serve = false` disables serving everywhere it
+    // is consulted rather than in one place only.
+    let serve_enabled = raw
+        .get("serve")
         .and_then(|v| v.as_bool())
-        .unwrap_or(!where_.is_empty());
+        .or_else(|| serve_cfg.and_then(|t| t.get("enabled")).and_then(|v| v.as_bool()))
+        .unwrap_or(true);
     let discover = raw
         .get("discover")
         .and_then(|v| v.as_bool())
@@ -320,7 +323,13 @@ pub fn load(path: Option<&Path>) -> Result<Config, ConfigError> {
         path: if exists { Some(p) } else { None },
         node_id,
         node_name,
-        serve: bool_of(serve_cfg.and_then(|t| t.get("enabled")), true),
+        // `serve = false` at the top level is the documented tail form, but this used to read
+        // only `[serve] enabled`. A tail written that way silently ran as a head: it bound a port
+        // it never needed and skipped discovery. Accept both, preferring the explicit table key.
+        serve: match raw.get("serve").and_then(|v| v.as_bool()) {
+            Some(b) => b,
+            None => bool_of(serve_cfg.and_then(|t| t.get("enabled")), true),
+        },
         bind: match serve_cfg.and_then(|t| t.get("bind")) {
             Some(v) => str_of(Some(v)),
             None => "127.0.0.1".to_string(),
@@ -378,6 +387,18 @@ impl Watcher {
 #[cfg(test)]
 mod port_tests {
     use super::port_of;
+
+    #[test]
+    fn a_top_level_serve_false_means_tail() {
+        // The documented tail form. Reading only `[serve] enabled` made every such config run
+        // as a head, binding a port and skipping discovery.
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("tail.toml");
+        std::fs::write(&f, "serve = false\nreport_to = \"http://head:8771\"\n[node]\nid = \"t\"\n").unwrap();
+        let cfg = super::load(Some(&f)).unwrap();
+        assert!(!cfg.serve, "serve = false must be honoured");
+        assert!(cfg.discover, "a tail with no service list should discover");
+    }
 
     #[test]
     fn reads_the_port_off_a_target() {
