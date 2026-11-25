@@ -374,3 +374,18 @@ impl Watcher {
         &self.config
     }
 }
+
+#[cfg(test)]
+mod port_tests {
+    use super::port_of;
+
+    #[test]
+    fn reads_the_port_off_a_target() {
+        // Every card used to show no port because it came from a config field nobody filled in.
+        assert_eq!(port_of("http://127.0.0.1:3009/"), "3009");
+        assert_eq!(port_of("127.0.0.1:22"), "22");
+        assert_eq!(port_of("http://[::1]:8770/api/health"), "8770");
+        assert_eq!(port_of("https://example.org/x"), "");
+        assert_eq!(port_of(""), "");
+    }
+}
