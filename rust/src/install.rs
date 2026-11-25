@@ -304,6 +304,8 @@ pub fn is_installed(cfg: &config::Config) -> bool {
     if !unit.exists() {
         return false;
     }
+    // A unit that does not exist is a definite "no", never an "I could not tell": defaulting to
+    // true here is what let a tail report a LaunchAgent it does not have.
     if cfg!(target_os = "macos") {
         let uid = std::process::Command::new("id")
             .arg("-u")

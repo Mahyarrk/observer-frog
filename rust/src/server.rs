@@ -720,7 +720,11 @@ fn route(req: &Request, app: &Arc<App>) -> (u16, String, Vec<u8>, bool) {
             }
         }
         ("GET" | "HEAD", _) if normalized == "/api/autostart" => {
-            let cfg = app.cfg.clone();
+            // Read the file, not `app.cfg`: the role can change underneath a running process
+            // (installing rewrites the unit), and a head answering about a tail's autostart is
+            // how the switch appeared to reset itself after every refresh.
+            let cfg = crate::config::load(Some(&crate::settings::target(&app.cfg)))
+                .unwrap_or_else(|_| app.cfg.clone());
             (200, json_ct, json_bytes(&json!({
                 "ok": true,
                 "enabled": crate::install::is_installed(&cfg),
@@ -733,7 +737,9 @@ fn route(req: &Request, app: &Arc<App>) -> (u16, String, Vec<u8>, bool) {
             }
             let body: Value = serde_json::from_slice(&req.body).unwrap_or(json!({}));
             let on = body.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false);
-            match crate::install::set_enabled(&app.cfg, on) {
+            let cfg = crate::config::load(Some(&crate::settings::target(&app.cfg)))
+                .unwrap_or_else(|_| app.cfg.clone());
+            match crate::install::set_enabled(&cfg, on) {
                 Ok(msg) => (200, json_ct, json_bytes(&json!({
                     "ok": true, "enabled": on, "detail": msg,
                 })), false),
