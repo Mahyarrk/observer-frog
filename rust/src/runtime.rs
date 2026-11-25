@@ -57,7 +57,7 @@ pub fn run(cfg: Config, config_path: Option<PathBuf>, tls: Option<(PathBuf, Path
     let poller_holder: Arc<Mutex<Option<Arc<poller::Poller>>>> = Arc::new(Mutex::new(None));
     let app = build(&cfg, Arc::clone(&poller_holder));
 
-    let port = match server::serve(Arc::clone(&app), &cfg.bind, cfg.port, tls.clone()) {
+    let port = match server::listen(Arc::clone(&app), &cfg.bind, cfg.port, tls.clone()) {
         Ok(p) => p,
         Err(e) => {
             eprintln!("cannot bind {}:{}: {e}", cfg.bind, cfg.port);
@@ -65,11 +65,30 @@ pub fn run(cfg: Config, config_path: Option<PathBuf>, tls: Option<(PathBuf, Path
         }
     };
 
+    // A second, plain-HTTP listener for tail reports. Tails are LAN boxes that should not manage
+    // certificates; the TLS listener above exists for a phone installing the PWA. Both share one
+    // App, so a report written through this port is visible immediately over TLS.
+    let mut report_bound: Option<u16> = None;
+    if let Some(rp) = cfg.report_port {
+        if rp == cfg.port {
+            eprintln!("report_port {} is the same as port; the report listener is disabled", rp);
+        } else {
+            match server::listen(Arc::clone(&app), &cfg.bind, rp, None) {
+                Ok(p) => report_bound = Some(p),
+                Err(e) => eprintln!("cannot bind report port {}:{}: {e} (continuing without it)", cfg.bind, rp),
+            }
+        }
+    }
+
     let scheme = if tls.is_some() { "https" } else { "http" };
     println!("observer-frog serving {scheme}://{}:{}/", cfg.bind, port);
     println!("  node {} ({})", cfg.node_id, cfg.node_name);
     println!("  {} service(s), poll every {}s", cfg.services.len(), cfg.poll_interval);
     println!("  database {}", cfg.db_path.display());
+    if let Some(rp) = report_bound {
+        let scheme = if tls.is_some() { "plain HTTP for tails" } else { "plain HTTP" };
+        println!("  tail reports on {scheme} {}:{rp}/api/report", cfg.bind);
+    }
 
     // Self-monitoring begins only now that the socket is bound (invariant I9).
     let p = Arc::new(poller::Poller::new());

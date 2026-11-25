@@ -694,6 +694,16 @@ fn route(req: &Request, app: &Arc<App>) -> (u16, String, Vec<u8>, bool) {
 /// With a cert and key every accepted connection is wrapped in TLS before the HTTP parser sees
 /// it, so the request handler stays unaware of the transport.
 pub fn serve(app: Arc<App>, bind: &str, port: u16, tls: Option<(PathBuf, PathBuf)>) -> std::io::Result<u16> {
+    listen(app, bind, port, tls)
+}
+
+/// Bind one listener and serve it. Call it twice to have TLS and plain HTTP at the same time.
+///
+/// Both listeners share the `App`, so state, flags and the poll lock are single instances: a
+/// report that arrives over plain HTTP is immediately visible to a browser reading over TLS.
+/// This is deliberate because a tail on a LAN cannot reasonably be asked to manage certificates,
+/// while a phone installing a PWA cannot reasonably be asked to trust a plain-HTTP origin.
+pub fn listen(app: Arc<App>, bind: &str, port: u16, tls: Option<(PathBuf, PathBuf)>) -> std::io::Result<u16> {
     let listener = TcpListener::bind((bind, port))?;
     let actual = listener.local_addr()?.port();
 

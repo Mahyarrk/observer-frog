@@ -8,8 +8,9 @@ wrote this.
 It watches the services you list, records when they go down and come back, keeps 30 days of uptime,
 and serves a PWA you can install on your home screen.
 
-Pre-alpha, and single-machine only: remote nodes do not exist yet. It ships as one static binary,
-with no runtime and no temp directory extracted at launch.
+It runs on more than one machine: one install is the head that serves the dashboard, and every
+other machine is a tail that reports to it. It ships as one static binary, with no runtime and no
+temp directory extracted at launch.
 
 ## Quick start
 
@@ -31,6 +32,39 @@ With a certificate, the same binary speaks HTTPS itself:
 
 A deployment looks like a staging area and a promotion step: build a candidate, run it beside the
 one in use against the same configuration, compare, then promote.
+
+## Two machines
+
+A tail probes its own services and posts the result. It runs no server and needs no certificate.
+
+```bash
+# on the head: register the tail and its token (the token comes from the environment)
+export TAIL_TOKEN=$(openssl rand -hex 24)
+observer-frog enrol laptop --token-env TAIL_TOKEN --interval 30
+
+# on the tail: report every 30s
+export TAIL_TOKEN=...            # the same value
+observer-frog report --to http://head:8771 --token-env TAIL_TOKEN
+```
+
+The head stamps arrival time, so a tail with a wrong clock cannot corrupt the record. Reports are
+idempotent: a retry over a flaky link changes nothing. A tail that stops reporting has its
+services marked unavailable, never down, and you get one notification per node rather than one
+per service.
+
+Each device names itself from its own hostname. A display name can be set from the dashboard, and
+clearing it restores the name the machine reports.
+
+### One port for phones, one for tails
+
+A phone installing the PWA needs TLS; a tail on a LAN should not be asked to manage
+certificates. Both listeners can run at once over the same state:
+
+```toml
+[serve]
+port = 8770           # TLS here, for browsers
+report_port = 8771    # plain HTTP here, for tail reports
+```
 
 ## Adding a service
 
@@ -105,7 +139,11 @@ manage certificates at all.
 
 No service control. There is no start or stop endpoint, so a bad token cannot restart anything.
 
-No public status pages and no notification zoo. ntfy only, for now.
+No public status pages and no notification zoo. Two sinks: ntfy, and a generic webhook that
+accepts a JSON POST.
+
+No store-and-forward. A tail that cannot reach the head loses those samples rather than queueing
+them; there is no buffer to drain later.
 
 ## Honest limits
 

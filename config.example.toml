@@ -14,6 +14,10 @@ name = ""                   # blank = this machine's hostname
 enabled = true
 bind = "127.0.0.1"          # loopback. Use 0.0.0.0 only behind a proxy or VPN.
 port = 8770
+# A second plain-HTTP listener, used only for tail reports. Tails are LAN machines that should
+# not manage certificates; the listener on `port` can carry TLS for a phone installing the PWA.
+# Both run at once against the same state, so a report on this port shows up immediately over TLS.
+# report_port = 8771
 
 # ---------------------------------------------------------------- services
 # Five probe kinds. Delete what you do not need.

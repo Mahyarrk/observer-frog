@@ -59,6 +59,12 @@ pub struct Config {
     pub port: u16,
     pub poll_interval: u64,
     pub db_path: PathBuf,
+    /// A second plain-HTTP listener for tail reports. `None` disables it.
+    ///
+    /// Tails live on a LAN and should not manage certificates; a phone installing a PWA needs
+    /// TLS. Running both at once is the normal case, and the config says so explicitly rather
+    /// than making the operator choose.
+    pub report_port: Option<u16>,
     pub services: Vec<Service>,
     pub sinks: Vec<Sink>,
 }
@@ -256,6 +262,12 @@ pub fn load(path: Option<&Path>) -> Result<Config, ConfigError> {
         Some(v) if !str_of(Some(v)).trim().is_empty() => str_of(Some(v)),
         _ => hostname(),
     };
+    // A port of 0 or an absent key means "no separate report listener".
+    let report_port = match int_of(serve_cfg.and_then(|t| t.get("report_port"))) {
+        0 => None,
+        n if n > 0 && n <= 65535 => Some(n as u16),
+        _ => None,
+    };
     let poll_interval = match int_of(raw.get("poll_interval")) {
         0 => DEFAULT_POLL_INTERVAL,
         n => n.max(1) as u64,
@@ -280,6 +292,7 @@ pub fn load(path: Option<&Path>) -> Result<Config, ConfigError> {
         },
         poll_interval,
         db_path,
+        report_port,
         services,
         sinks,
     })
