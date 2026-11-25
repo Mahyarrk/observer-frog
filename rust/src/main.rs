@@ -1,6 +1,6 @@
 //! CLI entry point: `observer-frog [status|config|catalog|add|metrics|serve]`.
 
-use observer_frog::{catalog, config, db, metrics, state};
+use observer_frog::{catalog, config, db, metrics};
 use std::path::PathBuf;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");

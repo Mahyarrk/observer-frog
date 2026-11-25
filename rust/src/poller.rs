@@ -8,7 +8,7 @@ use crate::config::Service;
 use crate::probes;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use sysinfo::{ProcessesToUpdate, System};
 
 pub const MAX_WORKERS: usize = 12;

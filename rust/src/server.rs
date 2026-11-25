@@ -9,7 +9,7 @@ use crate::metrics;
 use crate::poller;
 use crate::probes::clip;
 use crate::state;
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
