@@ -168,6 +168,7 @@ mod tests {
             port: 8770,
             poll_interval: 30,
             db_path: std::path::PathBuf::from("/tmp/of-tail-test.db"),
+            report_port: None,
             services,
             sinks: vec![],
         }
