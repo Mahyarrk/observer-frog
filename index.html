@@ -323,6 +323,52 @@
       font-size: var(--t-meta);
     }
 
+    .node-bar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 10px 0 0;
+      padding: 8px 12px;
+      border: 1px solid var(--border, #1e293b);
+      border-radius: 12px;
+      background: var(--card, rgba(15, 23, 42, 0.6));
+    }
+    .node-bar[hidden] { display: none; }
+    .node-bar-label {
+      font-size: 10px;
+      letter-spacing: 0.12em;
+      color: var(--muted-foreground, #64748b);
+      text-transform: uppercase;
+    }
+    .node-select {
+      flex: 1;
+      min-width: 0;
+      background: transparent;
+      color: inherit;
+      border: 0;
+      font: inherit;
+      font-size: 13px;
+      padding: 2px 0;
+    }
+    .node-select:focus-visible { outline: 2px solid #10b981; outline-offset: 2px; border-radius: 6px; }
+    .node-bar-state { font-size: 11px; color: var(--muted-foreground, #64748b); white-space: nowrap; }
+    .node-edit {
+      flex: 0 0 auto;
+      width: 28px;
+      height: 28px;
+      display: grid;
+      place-items: center;
+      border: 1px solid var(--border, #1e293b);
+      border-radius: 8px;
+      background: transparent;
+      color: var(--muted-foreground, #94a3b8);
+      font-size: 14px;
+      line-height: 1;
+      cursor: pointer;
+    }
+    .node-edit:hover { color: #10b981; border-color: #10b981; }
+    .node-edit:focus-visible { outline: 2px solid #10b981; outline-offset: 2px; }
+
     .nav-tabs {
       display: inline-flex;
       flex-wrap: wrap;
@@ -1644,6 +1690,13 @@
             <span class="tab-badge" id="tab-badge-history">--</span>
           </button>
         </div>
+        <div class="node-bar" id="node-bar" hidden>
+          <label class="node-bar-label" for="node-select">NODE</label>
+          <select id="node-select" class="node-select"></select>
+          <button class="node-edit" id="node-edit" type="button" title="Rename this node"
+                  aria-label="Rename this node">&#9998;</button>
+          <span class="node-bar-state" id="node-bar-state"></span>
+        </div>
         <div class="header-sub-meta">
           <span id="brand-port">PORT —</span>
           <span style="color: #334155;">•</span>
@@ -1769,7 +1822,7 @@
       const API_BASE = (window.location.pathname.replace(/\/$/, '') || '');
       // Bump on every shell change. Declared before first use: a `const` referenced above its
       // declaration throws a TDZ error and takes the whole script down (it did).
-      const BUILD = 'of-4';
+      const BUILD = 'of-6';
       // Show the address actually in use, not a baked-in host.
       (function () {
         const el = document.getElementById('brand-url');
@@ -1781,7 +1834,18 @@
         const buildEl = document.getElementById('build-tag');
         if (buildEl) buildEl.textContent = 'build ' + BUILD;
       })();
-      const API_ENDPOINT = API_BASE + '/api/status';
+      // A node selector changes which node these endpoints describe. One variable, so every
+      // existing fetch picks it up without touching the call sites.
+      let activeNode = '';
+      function endpointFor(path) {
+        const q = activeNode ? (path.includes('?') ? '&' : '?') + 'node=' + encodeURIComponent(activeNode) : '';
+        return API_BASE + path + q;
+      }
+      const nodeBar = document.getElementById('node-bar');
+      const nodeSelect = document.getElementById('node-select');
+      const nodeBarState = document.getElementById('node-bar-state');
+      const nodeEdit = document.getElementById('node-edit');
+      let API_ENDPOINT = API_BASE + '/api/status';
       const POLL_ENDPOINT = API_BASE + '/api/poll';
       const POLL_INTERVAL_SEC = 30;
       const STORAGE_KEY = 'observerfrog_status_cache_v1';
@@ -2412,7 +2476,7 @@
           // Manual = ask the server to run a NEW probe wave (/api/poll). If a wave is already
           // running the server answers 409, so fall back to the current snapshot rather than
           // showing an error for something that is in fact working.
-          let response = await fetch(isManual ? POLL_ENDPOINT : API_ENDPOINT, {
+          let response = await fetch(isManual ? (activeNode ? API_ENDPOINT : POLL_ENDPOINT) : API_ENDPOINT, {
             method: 'GET',
             headers: { 'Accept': 'application/json' },
             cache: 'no-store',
@@ -2770,6 +2834,78 @@
           saveCollapsedGroups();
         }
       }, true);
+
+      // ---- node selector -------------------------------------------------
+      // The head serves many nodes. The bar stays hidden until a second node has actually
+      // reported, so a single-machine install looks exactly as it did in v0.1.
+      const NODE_KEY = 'observerfrog_active_node_v1';
+
+      async function loadNodes() {
+        try {
+          const res = await fetch(API_BASE + '/api/nodes', { cache: 'no-store' });
+          if (!res.ok) return;
+          const data = await res.json();
+          const nodes = (data && data.nodes) || [];
+          if (nodes.length < 2) {
+            nodeBar.hidden = true;
+            return;
+          }
+          nodeBar.hidden = false;
+          nodeSelect.innerHTML = nodes
+            .map((n) => {
+              const label = n.local ? n.name + ' (this machine)' : n.name;
+              const suffix = n.silent ? ' — not reporting' : '';
+              return '<option value="' + n.id + '">' + escapeHtml(label + suffix) + '</option>';
+            })
+            .join('');
+          let saved = '';
+          try { saved = localStorage.getItem(NODE_KEY) || ''; } catch (_) {}
+          if (saved && nodes.some((n) => n.id === saved)) {
+            nodeSelect.value = saved;
+            activeNode = nodes[0] && nodes[0].id === saved ? '' : saved;
+          }
+          const cur = nodes.find((n) => n.id === (activeNode || nodeSelect.value));
+          nodeBarState.textContent = cur && cur.silent ? 'not reporting' : '';
+          API_ENDPOINT = endpointFor('/api/status');
+        } catch (_) { /* a missing /api/nodes is a v0.1 head; hide the bar */ }
+      }
+
+      function escapeHtml(t) {
+        return String(t).replace(/[&<>"']/g, (c) =>
+          ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+      }
+
+      function onNodeChange() {
+        // Option 0 is always this machine, added first by /api/nodes. Selecting it clears the
+        // parameter so the v0.1 URL shape and cache key stay identical.
+        activeNode = nodeSelect.selectedIndex === 0 ? '' : nodeSelect.value;
+        try { localStorage.setItem(NODE_KEY, nodeSelect.value); } catch (_) {}
+        API_ENDPOINT = endpointFor('/api/status');
+        fetchStatus(true);
+      }
+
+      // The pen edits a display name only. The reported name is what the device says about
+      // itself and stays untouched, so clearing the override restores the truth.
+      async function renameNode() {
+        const current = nodeSelect.value || '';
+        const shown = nodeSelect.options[nodeSelect.selectedIndex]
+          ? nodeSelect.options[nodeSelect.selectedIndex].textContent.replace(' (this machine)', '')
+          : current;
+        const next = window.prompt('Display name for ' + shown + ' (blank restores the name the device reports)', shown);
+        if (next === null) return;
+        try {
+          const res = await fetch(API_BASE + '/api/node/name', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ node: current, display_name: next.trim() }),
+          });
+          if (res.ok) { await loadNodes(); fetchStatus(true); }
+        } catch (_) { /* leave the old name in place */ }
+      }
+
+      nodeEdit.addEventListener('click', renameNode);
+      nodeSelect.addEventListener('change', onNodeChange);
+      loadNodes();
 
       // Initialize App
       updateRollingHistory(currentData);

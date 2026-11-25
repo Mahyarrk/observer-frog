@@ -27,6 +27,18 @@ VOLATILE_DEVICE = {
 }
 VOLATILE_KPI = {"mttr_s", "worst_uptime"}
 
+# v0.2 changes that are intentional, not regressions. Each is named so a future reader knows the
+# difference was decided rather than missed.
+EXPECTED_DIVERGENCES = {
+    "device.name": (
+        "v0.2: a device names itself from its own hostname instead of a config field, so the "
+        "name survives a rename and cannot go stale"
+    ),
+    "history.node": (
+        "v0.2: /api/history states which node it describes, because the head now serves many"
+    ),
+}
+
 
 def get(base, path):
     with urllib.request.urlopen(base.rstrip("/") + path, timeout=15) as r:
@@ -73,12 +85,21 @@ def main():
             if k in VOLATILE_DEVICE:
                 continue
             if d_py[k] != d_rs[k]:
-                problems.append(f"device.{k}: py={d_py[k]!r} rs={d_rs[k]!r}")
+                key = f"device.{k}"
+                if key in EXPECTED_DIVERGENCES:
+                    continue
+                problems.append(f"{key}: py={d_py[k]!r} rs={d_rs[k]!r}")
 
     # history: KPI keys always agree; counts agree when both have seen the same traffic
     py_hist = get(py_base, "/api/history?days=30")
     rs_hist = get(rs_base, "/api/history?days=30")
-    cmp_shapes("/api/history", py_hist, rs_hist, problems)
+    extra = set(rs_hist) - set(py_hist)
+    allowed_extra = {"node"}  # v0.2: /api/history names the node it describes
+    if set(py_hist) - set(rs_hist) or (extra - allowed_extra):
+        problems.append(
+            f"/api/history: key sets differ | only_py={sorted(set(py_hist)-set(rs_hist))} "
+            f"only_rs={sorted(extra - allowed_extra)}"
+        )
     cmp_shapes("history.kpi", py_hist["kpi"], rs_hist["kpi"], problems)
     for k in py_hist["kpi"]:
         if k in VOLATILE_KPI:

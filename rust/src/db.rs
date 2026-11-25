@@ -8,7 +8,7 @@ use rusqlite::{Connection, OpenFlags};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub const SCHEMA_VERSION: i64 = 3;
+pub const SCHEMA_VERSION: i64 = 4;
 pub const RAW_RETENTION_S: i64 = 86_400; // 24 h of per-check rows
 pub const ROLLUP_RETENTION_S: i64 = 2_592_000; // 30 days of hourly counters
 
@@ -80,7 +80,9 @@ CREATE TABLE IF NOT EXISTS nodes (
     interval_s    INTEGER NOT NULL DEFAULT 30,
     token_sha256  TEXT    NOT NULL DEFAULT '',
     first_seen_ts INTEGER NOT NULL DEFAULT 0,
-    last_seen_ts  INTEGER NOT NULL DEFAULT 0
+    last_seen_ts  INTEGER NOT NULL DEFAULT 0,
+    reported_name TEXT    NOT NULL DEFAULT '',
+    display_name  TEXT    NOT NULL DEFAULT ''
 );
 "#;
 
@@ -173,6 +175,28 @@ pub fn init(path: &Path) -> rusqlite::Result<i64> {
                     [],
                 )?;
                 version = 3;
+            }
+            if version < 4 {
+                // Two new columns: the name the device reports about itself, and an optional
+                // name the operator prefers. Keeping them apart means clearing an override
+                // restores what the machine actually calls itself.
+                for (col, ddl) in [
+                    ("reported_name", "ALTER TABLE nodes ADD COLUMN reported_name TEXT NOT NULL DEFAULT ''"),
+                    ("display_name", "ALTER TABLE nodes ADD COLUMN display_name TEXT NOT NULL DEFAULT ''"),
+                ] {
+                    let has: bool = conn
+                        .query_row(
+                            "SELECT 1 FROM pragma_table_info('nodes') WHERE name = ?",
+                            (col,),
+                            |_| Ok(true),
+                        )
+                        .unwrap_or(false);
+                    if !has {
+                        conn.execute(ddl, [])?;
+                    }
+                }
+                conn.execute("UPDATE nodes SET reported_name = name WHERE reported_name = ''", [])?;
+                version = 4;
             }
             conn.execute(
                 "UPDATE schema_version SET version = ?, applied_ts = ?",
@@ -287,7 +311,7 @@ mod tests {
             )
             .unwrap();
         }
-        assert_eq!(init(&db).unwrap(), 3);
+        assert_eq!(init(&db).unwrap(), SCHEMA_VERSION);
         let conn = connect(&db).unwrap();
         let checks: i64 = conn.query_row("SELECT COUNT(*) FROM service_checks", [], |r| r.get(0)).unwrap();
         let incs: i64 = conn.query_row("SELECT COUNT(*) FROM incidents", [], |r| r.get(0)).unwrap();
@@ -296,7 +320,12 @@ mod tests {
         let nodes: bool = conn
             .query_row("SELECT 1 FROM sqlite_master WHERE type='table' AND name='nodes'", [], |_| Ok(true))
             .unwrap_or(false);
-        assert!(nodes, "v3 must create the nodes table");
+        assert!(nodes, "the upgrade must create the nodes table");
+        // v4 adds the two name columns; a v2 database must gain them too.
+        let has_reported: bool = conn
+            .query_row("SELECT 1 FROM pragma_table_info('nodes') WHERE name='reported_name'", [], |_| Ok(true))
+            .unwrap_or(false);
+        assert!(has_reported, "the upgrade must add reported_name");
     }
 
     #[test]
@@ -319,7 +348,7 @@ mod tests {
         }
         // This is the real bug: two writers landed in the same second, and the old schema had no
         // constraint to stop them. The upgrade must not fail.
-        assert_eq!(init(&db).unwrap(), 3);
+        assert_eq!(init(&db).unwrap(), SCHEMA_VERSION);
         let conn = connect(&db).unwrap();
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM service_checks", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 1, "duplicates survived the migration");

@@ -254,7 +254,12 @@ fn linux_pretty_name() -> Option<String> {
 }
 
 /// The `devices[]` entry for this machine, in the shape the UI already renders.
-pub fn device_card(node_id: &str, node_name: Option<&str>) -> Value {
+/// The device card.
+///
+/// The name always comes from the machine, never from a caller or a config field: a hardcoded
+/// name goes stale the moment the host is renamed, and then the dashboard lies about which
+/// machine you are looking at.
+pub fn device_card(node_id: &str) -> Value {
     let k = kind();
     let mut chip = if cfg!(target_os = "macos") {
         mac_chip().unwrap_or_else(cpu_brand)
@@ -274,10 +279,7 @@ pub fn device_card(node_id: &str, node_name: Option<&str>) -> Value {
         "Windows".to_string()
     };
 
-    let host = node_name
-        .map(|s| s.to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(crate::config::hostname);
+    let host = crate::config::hostname();
 
     let mut card = json!({
         "id": format!("dev_{node_id}"),

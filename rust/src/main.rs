@@ -52,6 +52,7 @@ fn run(args: &[String]) -> i32 {
         Some("add") => cmd_add(&cfg, &entries, args),
         Some("metrics") => cmd_metrics(&cfg),
         Some("enrol") => cmd_enrol(&cfg, args),
+        Some("report") => cmd_report(&cfg, args),
         Some("serve") | None => cmd_serve(&cfg, args, config_path),
         Some("status") => cmd_status(&cfg),
         Some(other) => {
@@ -79,6 +80,7 @@ commands:
   add        print the config block for a catalog service
   metrics    print this machine's status line (no server)
   enrol      register a node and its token (token from env, never the config)
+  report     tail mode: probe this machine and post to a head
   serve      start the dashboard (the default when no command is given)
 
 serve options:
@@ -237,8 +239,36 @@ fn cmd_enrol(cfg: &config::Config, args: &[String]) -> i32 {
     }
 }
 
+/// Tail mode: probe this machine and post to a head.
+fn cmd_report(cfg: &config::Config, args: &[String]) -> i32 {
+    let head = match flag(args, "--to") {
+        Some(h) if !h.trim().is_empty() => h.trim().to_string(),
+        _ => {
+            eprintln!("usage: observer-frog report --to https://head:8770 --token-env VAR");
+            return 2;
+        }
+    };
+    let var = match flag(args, "--token-env") {
+        Some(v) => v,
+        None => {
+            eprintln!("--token-env is required: the token is read from the environment");
+            return 2;
+        }
+    };
+    let token = match std::env::var(var) {
+        Ok(t) if !t.trim().is_empty() => t.trim().to_string(),
+        _ => {
+            eprintln!("environment variable {var} is unset or empty");
+            return 2;
+        }
+    };
+    let halt = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let opts = observer_frog::tail::TailOptions { report_to: head, token };
+    observer_frog::tail::run(cfg.clone(), opts, halt)
+}
+
 fn cmd_metrics(cfg: &config::Config) -> i32 {
-    let card = metrics::device_card(&cfg.node_id, Some(&cfg.node_name));
+    let card = metrics::device_card(&cfg.node_id);
     let s = |k: &str| -> String {
         match card.get(k) {
             Some(serde_json::Value::String(v)) => v.clone(),

@@ -74,19 +74,26 @@ impl App {
         *self.snapshot.lock().unwrap() = snap;
     }
 
-    /// Compile the payload. Flags and history are read now, never baked in (I6).
-    pub fn snapshot(&self, with_history: bool) -> Value {
-        let mut snap = {
+    /// Compile the payload for one node. Flags and history are read now, never baked in (I6).
+    ///
+    /// `None` means the node this process runs on. A named node is assembled from the database
+    /// rather than the in-memory snapshot, because only the local probe loop keeps one.
+    pub fn snapshot_for(&self, node_id: Option<&str>, with_history: bool) -> Value {
+        let target = node_id.unwrap_or(&self.cfg.node_id);
+        let mut snap = if target == self.cfg.node_id {
             let guard = self.snapshot.lock().unwrap();
             guard.clone()
+        } else {
+            // A remote node has no live snapshot here; its last known state comes from SQLite.
+            self.remote_snapshot(target)
         };
         if let Some(obj) = snap.as_object_mut() {
             obj.insert(
                 "ignored".into(),
-                json!(db::ignored_ids(&self.cfg.db_path, &self.cfg.node_id).unwrap_or_default()),
+                json!(db::ignored_ids(&self.cfg.db_path, target).unwrap_or_default()),
             );
             if with_history {
-                obj.insert("history".into(), json!(self.history_map(HISTORY_POINTS)));
+                obj.insert("history".into(), json!(self.history_map_for(target, HISTORY_POINTS)));
                 let last_err = self.last_wave_error.lock().unwrap().clone();
                 obj.insert(
                     "self_monitoring".into(),
@@ -103,8 +110,56 @@ impl App {
         snap
     }
 
+    /// The local node's snapshot, the shape v0.1 clients expect.
+    pub fn snapshot(&self, with_history: bool) -> Value {
+        self.snapshot_for(None, with_history)
+    }
+
+    /// Assemble a remote node's view from what it last reported.
+    ///
+    /// The head keeps no live poll of a remote node, so this is the database's opinion: the last
+    /// known state per service, and the last time the node was heard from.
+    fn remote_snapshot(&self, node_id: &str) -> Value {
+        let states = state::load_states(&self.cfg.db_path, node_id).unwrap_or_default();
+        let mut services: Vec<Value> = states
+            .iter()
+            .map(|(sid, st)| {
+                json!({
+                    "id": sid,
+                    "name": if st.name.is_empty() { sid.clone() } else { st.name.clone() },
+                    "group": st.group,
+                    "status": st.state,
+                    "detail": st.last_detail,
+                    "latency_ms": 0,
+                    "ports": "",
+                    "address": "",
+                })
+            })
+            .collect();
+        services.sort_by(|a, b| {
+            a["group"].as_str().unwrap_or("").cmp(b["group"].as_str().unwrap_or(""))
+                .then_with(|| a["name"].as_str().unwrap_or("").cmp(b["name"].as_str().unwrap_or("")))
+        });
+
+        let (name, last_seen, interval) = node_meta(&self.cfg.db_path, node_id);
+        json!({
+            "timestamp": last_seen,
+            "node_ts": last_seen,
+            "node": node_id,
+            "services": services,
+            "devices": [{
+                "id": format!("dev_{node_id}"),
+                "name": if name.is_empty() { node_id.to_string() } else { name },
+                "kind": "remote",
+                "status": if last_seen > 0 { "up" } else { "unknown" },
+                "detail": format!("reports every {interval}s"),
+            }],
+            "confirm_polls": state::DOWN_CONFIRM_POLLS,
+        })
+    }
+
     /// Per-service sparkline: 1 for healthy, 0 otherwise, oldest first.
-    pub fn history_map(&self, points: usize) -> HashMap<String, Vec<u8>> {
+    pub fn history_map_for(&self, node_id: &str, points: usize) -> HashMap<String, Vec<u8>> {
         let mut out: HashMap<String, Vec<u8>> = HashMap::new();
         if points == 0 {
             return out;
@@ -122,7 +177,7 @@ impl App {
             Ok(s) => s,
             Err(_) => return out,
         };
-        let rows = stmt.query_map((&self.cfg.node_id, t - bucket * points as i64), |r| {
+        let rows = stmt.query_map((node_id, t - bucket * points as i64), |r| {
             Ok((
                 r.get::<_, String>(0)?,
                 r.get::<_, i64>(1)?,
@@ -146,7 +201,7 @@ impl App {
         let t = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0);
         let mut cache = self.device_cache.lock().unwrap();
         if cache.0.is_null() || t - cache.1 > 5.0 {
-            cache.0 = metrics::device_card(&self.cfg.node_id, Some(&self.cfg.node_name));
+            cache.0 = metrics::device_card(&self.cfg.node_id);
             cache.1 = t;
         }
         cache.0.clone()
@@ -197,11 +252,89 @@ impl App {
     }
 }
 
-/// The `/api/history` contract the UI reads: incidents list, uptime rows, and KPIs.
+/// The local node's history, the shape v0.1 clients expect.
 pub fn build_history(app: &App, days: i64) -> Value {
+    build_history_for(app, &app.cfg.node_id.clone(), days)
+}
+
+/// A node's display name, last report time and interval. Zeros when the node is unknown.
+fn node_meta(path: &std::path::Path, node_id: &str) -> (String, i64, i64) {
+    let Ok(conn) = db::connect(path) else { return (String::new(), 0, 30) };
+    // The device names itself. A display override wins when the operator set one, but the
+    // reported name is what applies by default and is never lost.
+    conn.query_row(
+        "SELECT CASE WHEN display_name <> '' THEN display_name \
+                     WHEN reported_name <> '' THEN reported_name \
+                     ELSE name END, \
+                last_seen_ts, interval_s FROM nodes WHERE node_id = ?",
+        (node_id,),
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    )
+    .unwrap_or((String::new(), 0, 30))
+}
+
+/// Every node the head knows about, for the selector.
+pub fn nodes_list(app: &App) -> Value {
+    let now = now();
+    let mut out: Vec<Value> = Vec::new();
+    // The head itself is always present, even before any tail enrols.
+    out.push(json!({
+        "id": app.cfg.node_id,
+        "name": crate::config::hostname(),
+        "interval_s": app.cfg.poll_interval,
+        "last_seen_ts": now,
+        "local": true,
+        "silent": false,
+    }));
+    if let Ok(conn) = db::connect(&app.cfg.db_path) {
+        if let Ok(mut stmt) = conn.prepare(
+            "SELECT node_id, name, interval_s, last_seen_ts, reported_name, display_name FROM nodes ORDER BY node_id",
+        ) {
+            if let Ok(rows) = stmt.query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, i64>(2)?,
+                    r.get::<_, i64>(3)?,
+                    r.get::<_, String>(4)?,
+                    r.get::<_, String>(5)?,
+                ))
+            }) {
+                for row in rows.flatten() {
+                    let (id, name, interval, last_seen, reported, display) = row;
+                    let effective = if !display.is_empty() {
+                        display.clone()
+                    } else if !reported.is_empty() {
+                        reported.clone()
+                    } else {
+                        name.clone()
+                    };
+                    if id == app.cfg.node_id {
+                        continue; // already added as local
+                    }
+                    let silent = last_seen > 0 && now - last_seen > interval.max(1) * crate::silence::SILENCE_INTERVALS;
+                    out.push(json!({
+                        "id": id,
+                        "name": if effective.is_empty() { id.clone() } else { effective },
+                        "reported_name": reported,
+                        "display_name": display,
+                        "interval_s": interval,
+                        "last_seen_ts": last_seen,
+                        "local": false,
+                        "silent": silent,
+                    }));
+                }
+            }
+        }
+    }
+    json!({"nodes": out, "generated": now})
+}
+
+/// The `/api/history` contract the UI reads: incidents list, uptime rows, and KPIs.
+pub fn build_history_for(app: &App, node_id: &str, days: i64) -> Value {
     let t = now();
-    let incidents = state::recent_incidents(&app.cfg.db_path, &app.cfg.node_id, days, 100).unwrap_or_default();
-    let rows = state::uptime_rows(&app.cfg.db_path, &app.cfg.node_id, days).unwrap_or_default();
+    let incidents = state::recent_incidents(&app.cfg.db_path, node_id, days, 100).unwrap_or_default();
+    let rows = state::uptime_rows(&app.cfg.db_path, node_id, days).unwrap_or_default();
 
     let unacknowledged: Vec<&state::Incident> = incidents.iter().filter(|i| !i.ignored).collect();
     let closed_real: Vec<&&state::Incident> = unacknowledged.iter().filter(|i| !i.ongoing).collect();
@@ -262,11 +395,12 @@ pub fn build_history(app: &App, days: i64) -> Value {
         "worst_uptime": rows.first().map(|r| json!(r.uptime_pct)).unwrap_or(Value::Null),
         "worst_service": rows.first().map(|r| json!(r.name)).unwrap_or(Value::Null),
         "uptime_services": rows.len(),
-        "uptime_excluded": db::ignored_ids(&app.cfg.db_path, &app.cfg.node_id).map(|v| v.len()).unwrap_or(0),
+        "uptime_excluded": db::ignored_ids(&app.cfg.db_path, node_id).map(|v| v.len()).unwrap_or(0),
     });
 
     json!({
         "generated": t,
+        "node": node_id,
         "window_days": days,
         "incidents": incidents_json,
         "uptime": uptime_json,
@@ -441,7 +575,11 @@ fn route(req: &Request, app: &Arc<App>) -> (u16, String, Vec<u8>, bool) {
 
     match (req.method.as_str(), req.path.as_str()) {
         ("GET" | "HEAD", p) if p == "/api/status" || p == "/status/api/status" => {
-            (200, json_ct, json_bytes(&app.snapshot(true)), true)
+            let node = req.query.get("node").map(|s| s.as_str()).filter(|s| !s.is_empty());
+            (200, json_ct, json_bytes(&app.snapshot_for(node, true)), true)
+        }
+        ("GET" | "HEAD", p) if p == "/api/nodes" || p == "/status/api/nodes" => {
+            (200, json_ct, json_bytes(&nodes_list(app)), true)
         }
         ("GET" | "HEAD", p) if p == "/api/poll" || p == "/status/api/poll" => {
             let (ok, payload) = app.force_poll();
@@ -454,10 +592,37 @@ fn route(req: &Request, app: &Arc<App>) -> (u16, String, Vec<u8>, bool) {
                 .and_then(|v| v.parse::<i64>().ok())
                 .map(|d| d.clamp(1, 365))
                 .unwrap_or(30);
-            (200, json_ct, json_bytes(&build_history(app, days)), true)
+            let node = req.query.get("node").cloned().unwrap_or_else(|| app.cfg.node_id.clone());
+            (200, json_ct, json_bytes(&build_history_for(app, &node, days)), true)
         }
         ("GET" | "HEAD", p) if p == "/api/health" || p == "/status/api/health" => {
             (200, json_ct, json_bytes(&json!({"ok": true, "uptime_s": now() - app.started_ts})), false)
+        }
+        ("POST", _) if normalized == "/api/node/name" => {
+            let body: Value = serde_json::from_slice(&req.body).unwrap_or(json!({}));
+            let node = body.get("node").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+            if node.is_empty() {
+                return (400, json_ct, json_bytes(&json!({"ok": false, "error": "missing node"})), false);
+            }
+            // An empty display name clears the override, restoring the name the device reports.
+            let display = body.get("display_name").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+            let res = (|| -> rusqlite::Result<()> {
+                let conn = db::connect(&app.cfg.db_path)?;
+                conn.execute(
+                    "UPDATE nodes SET display_name = ? WHERE node_id = ?",
+                    (&display, &node),
+                )?;
+                Ok(())
+            })();
+            match res {
+                Ok(()) => {
+                    let (effective, _, _) = node_meta(&app.cfg.db_path, &node);
+                    (200, json_ct, json_bytes(&json!({
+                        "ok": true, "node": node, "name": effective, "display_name": display,
+                    })), false)
+                }
+                Err(e) => (500, json_ct, json_bytes(&json!({"ok": false, "error": e.to_string()})), false),
+            }
         }
         ("POST", _) if normalized == "/api/report" => {
             let (code, payload) = crate::ingest::handle_report(app, &req.headers, &req.body, req.declared_len);
@@ -473,17 +638,21 @@ fn route(req: &Request, app: &Arc<App>) -> (u16, String, Vec<u8>, bool) {
                 return (400, json_ct, json_bytes(&json!({"ok": false, "error": "missing id"})), false);
             }
             let want = body.get("ignored").and_then(|v| v.as_bool()).unwrap_or(false);
+            // The flag is per (node, service). Ignoring a service on one node must not silence
+            // the same service id on another.
+            let node = body
+                .get("node")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| app.cfg.node_id.clone());
             let res = (|| -> rusqlite::Result<()> {
                 let conn = db::connect(&app.cfg.db_path)?;
                 if want {
-                    conn.execute(
-                        "INSERT OR IGNORE INTO ignored VALUES (?,?)",
-                        (&app.cfg.node_id, &sid),
-                    )?;
+                    conn.execute("INSERT OR IGNORE INTO ignored VALUES (?,?)", (&node, &sid))?;
                 } else {
                     conn.execute(
                         "DELETE FROM ignored WHERE node_id = ? AND service_id = ?",
-                        (&app.cfg.node_id, &sid),
+                        (&node, &sid),
                     )?;
                 }
                 Ok(())
@@ -491,7 +660,7 @@ fn route(req: &Request, app: &Arc<App>) -> (u16, String, Vec<u8>, bool) {
             if let Err(e) = res {
                 return (500, json_ct, json_bytes(&json!({"ok": false, "error": clip(&e.to_string())})), false);
             }
-            let ignored = db::ignored_ids(&app.cfg.db_path, &app.cfg.node_id).unwrap_or_default();
+            let ignored = db::ignored_ids(&app.cfg.db_path, &node).unwrap_or_default();
             // Both shapes: the full list under both keys. The Python build returns the LIST in
             // `ignored` (not the boolean), and the frontend reads it as a list — returning a
             // bool here silently stops the UI from learning the server's truth.
@@ -499,7 +668,7 @@ fn route(req: &Request, app: &Arc<App>) -> (u16, String, Vec<u8>, bool) {
                 200,
                 json_ct,
                 json_bytes(&json!({
-                    "ok": true, "id": sid,
+                    "ok": true, "id": sid, "node": node,
                     "ignored": ignored,
                     "ignored_ids": ignored,
                 })),

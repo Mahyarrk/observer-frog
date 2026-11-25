@@ -9,7 +9,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub const PROBES: &[&str] = &["http", "tcp", "process", "file_age", "file_json"];
-pub const SINK_TYPES: &[&str] = &["ntfy"];
+pub const SINK_TYPES: &[&str] = &["ntfy", "webhook"];
 pub const DEFAULT_PORT: u16 = 8770;
 pub const DEFAULT_POLL_INTERVAL: u64 = 30;
 
@@ -247,12 +247,14 @@ pub fn load(path: Option<&Path>) -> Result<Config, ConfigError> {
     }
 
     let node_id = match node.and_then(|t| t.get("id")) {
-        Some(v) => str_of(Some(v)),
-        None => "local".to_string(),
+        Some(v) if !str_of(Some(v)).trim().is_empty() => str_of(Some(v)),
+        _ => "local".to_string(),
     };
+    // A blank name means "use this machine's hostname", which is what config.example.toml
+    // documents. Taking the empty string literally left the dashboard with no device name.
     let node_name = match node.and_then(|t| t.get("name")) {
-        Some(v) => str_of(Some(v)),
-        None => hostname(),
+        Some(v) if !str_of(Some(v)).trim().is_empty() => str_of(Some(v)),
+        _ => hostname(),
     };
     let poll_interval = match int_of(raw.get("poll_interval")) {
         0 => DEFAULT_POLL_INTERVAL,

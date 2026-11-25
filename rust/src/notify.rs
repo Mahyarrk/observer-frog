@@ -268,6 +268,42 @@ pub fn publish_ntfy(sink: &Sink, topic: &str, event: &Event) -> Result<i32, Stri
     }
 }
 
+/// POST a JSON event to an arbitrary URL.
+///
+/// The generic escape hatch: anything that can accept a POST gets notifications without this
+/// project growing a plugin system. The body is the event plus the run context a receiver needs
+/// to route it, and the same `use_proxy` rule applies as for ntfy (I8).
+pub fn publish_webhook(sink: &Sink, event: &Event, dashboard_url: &str) -> Result<i32, String> {
+    if sink.url.is_empty() {
+        return Err("no url configured".into());
+    }
+    let body = serde_json::json!({
+        "title": event.title,
+        "message": event.message,
+        "priority": event.priority,
+        "tags": event.tags,
+        "click": if event.click.is_empty() { dashboard_url } else { &event.click },
+        "source": "observer-frog",
+    });
+    let mut req = agent_for(sink.use_proxy)
+        .post(&sink.url)
+        .set("Content-Type", "application/json; charset=utf-8")
+        .set("User-Agent", "observer-frog/0.1");
+    // An optional bearer token, from the environment like every other secret.
+    if !sink.token_env.is_empty() {
+        if let Ok(t) = std::env::var(&sink.token_env) {
+            if !t.is_empty() {
+                req = req.set("Authorization", &format!("Bearer {t}"));
+            }
+        }
+    }
+    match req.send_string(&body.to_string()) {
+        Ok(resp) => Ok(resp.status() as i32),
+        Err(ureq::Error::Status(code, _)) => Err(format!("HTTP {code}")),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 /// Owns the digest, the rate limit and the sink list.
 pub struct Notifier {
     pub sinks: Vec<Sink>,
@@ -333,6 +369,14 @@ impl Notifier {
                     Err(info) => {
                         self.failures.push(format!("ntfy {}: {info}", sink_ntfy_base(sink)));
                         eprintln!("ntfy publish failed: {info}");
+                    }
+                }
+            } else if sink.kind == "webhook" {
+                match publish_webhook(sink, event, &self.dashboard_url) {
+                    Ok(_) => sent = true,
+                    Err(info) => {
+                        self.failures.push(format!("webhook {}: {info}", sink.url));
+                        eprintln!("webhook publish failed: {info}");
                     }
                 }
             } else {
@@ -461,5 +505,69 @@ mod tests {
         assert!(!rl.allow(3.0), "fourth message in the window should be suppressed");
         assert_eq!(rl.suppressed, 1);
         assert!(rl.allow(61.0), "the window should have rolled over");
+    }
+}
+
+#[cfg(test)]
+mod webhook_tests {
+    use super::*;
+
+    #[test]
+    fn webhook_without_url_fails_cleanly() {
+        let sink = Sink { kind: "webhook".into(), url: String::new(), ..Default::default() };
+        let ev = Event {
+            title: "t".into(), message: "m".into(), priority: 4,
+            tags: vec![], click: String::new(),
+        };
+        assert!(publish_webhook(&sink, &ev, "http://d/").is_err());
+    }
+
+    #[test]
+    fn webhook_posts_json_to_a_real_listener() {
+        // A one-shot TCP listener stands in for any receiver.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            use std::io::{BufRead, BufReader, Read, Write};
+            let mut reader = BufReader::new(&mut stream);
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            let mut len = 0usize;
+            loop {
+                let mut h = String::new();
+                if reader.read_line(&mut h).unwrap_or(0) == 0 { break; }
+                if h.trim().is_empty() { break; }
+                if let Some(v) = h.to_lowercase().strip_prefix("content-length:") {
+                    len = v.trim().parse().unwrap_or(0);
+                }
+            }
+            let mut body = vec![0u8; len];
+            reader.read_exact(&mut body).unwrap();
+            stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n").unwrap();
+            String::from_utf8_lossy(&body).to_string()
+        });
+
+        let sink = Sink {
+            kind: "webhook".into(),
+            url: format!("http://127.0.0.1:{port}/hook"),
+            use_proxy: false,
+            ..Default::default()
+        };
+        let ev = Event {
+            title: "Nginx is down".into(),
+            message: "connection refused".into(),
+            priority: 4,
+            tags: vec!["rotating_light".into()],
+            click: String::new(),
+        };
+        let status = publish_webhook(&sink, &ev, "http://dash/").unwrap();
+        assert_eq!(status, 200);
+        let received = handle.join().unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&received).expect("body must be JSON");
+        assert_eq!(parsed["title"], "Nginx is down");
+        assert_eq!(parsed["priority"], 4);
+        assert_eq!(parsed["source"], "observer-frog");
+        assert_eq!(parsed["click"], "http://dash/", "empty click falls back to the dashboard URL");
     }
 }

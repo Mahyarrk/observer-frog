@@ -151,15 +151,18 @@ pub fn touch_node(
     at: i64,
 ) -> rusqlite::Result<()> {
     let conn = db::connect(db_path)?;
+    // `name` mirrors reported_name for anything still reading the v3 column; reported_name is
+    // the device's own word and is never overwritten by a display override.
     conn.execute(
-        "INSERT INTO nodes (node_id, name, interval_s, token_sha256, first_seen_ts, last_seen_ts) \
-         VALUES (?,?,?,?,?,?) \
+        "INSERT INTO nodes (node_id, name, reported_name, interval_s, token_sha256, first_seen_ts, last_seen_ts) \
+         VALUES (?,?,?,?,?,?,?) \
          ON CONFLICT(node_id) DO UPDATE SET \
            name = CASE WHEN excluded.name <> '' THEN excluded.name ELSE nodes.name END, \
+           reported_name = CASE WHEN excluded.reported_name <> '' THEN excluded.reported_name ELSE nodes.reported_name END, \
            interval_s = CASE WHEN excluded.interval_s > 0 THEN excluded.interval_s ELSE nodes.interval_s END, \
            token_sha256 = CASE WHEN excluded.token_sha256 <> '' THEN excluded.token_sha256 ELSE nodes.token_sha256 END, \
            last_seen_ts = excluded.last_seen_ts",
-        (node_id, name, interval_s.max(0), token_digest, at, at),
+        (node_id, name, name, interval_s.max(0), token_digest, at, at),
     )?;
     Ok(())
 }

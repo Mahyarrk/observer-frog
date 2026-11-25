@@ -12,3 +12,4 @@ pub mod runtime;
 pub mod server;
 pub mod silence;
 pub mod state;
+pub mod tail;

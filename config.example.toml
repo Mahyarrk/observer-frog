@@ -61,7 +61,8 @@ target = "~/backups/.last-run"
 max_age_s = 129600          # 36 hours
 
 # ---------------------------------------------------------------- notifications
-# ntfy only in this version. Token comes from the environment, never the file.
+# Tokens come from the environment, never from this file. Every sink may be listed; each one
+# receives the same events.
 
 [[sink]]
 type = "ntfy"
@@ -69,3 +70,11 @@ url = "https://ntfy.sh"     # or your self-hosted instance
 topic = "change-me"
 # token_env = "NTFY_TOKEN"
 # use_proxy = false          # leave false: the alerter must not depend on what it watches
+
+# Any HTTP endpoint that accepts a JSON POST. The body is
+# {title, message, priority, tags, click, source}; a 2xx counts as delivered.
+# [[sink]]
+# type = "webhook"
+# url = "https://example.internal/hooks/frog"
+# token_env = "WEBHOOK_TOKEN"   # sent as Authorization: Bearer <token>
+# use_proxy = false
