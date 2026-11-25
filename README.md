@@ -8,20 +8,32 @@ wrote this.
 It watches the services you list, records when they go down and come back, keeps 30 days of uptime,
 and serves a PWA you can install on your home screen.
 
-Pre-alpha. The single-machine version runs, and its test suite is the thing I trust most about it.
-Remote nodes and install packaging do not exist yet.
+Pre-alpha. The single-machine version runs and is verified against a reference implementation.
+Remote nodes do not exist yet.
+
+It ships as one static binary. No runtime, no description file inside it, no temp directory
+extracted at launch.
 
 ## Quick start
 
 ```bash
 git clone https://github.com/Mahyarrk/observer-frog.git
-cd observer-frog
-uv venv --python 3.12 && uv pip install -p .venv/bin/python psutil
-.venv/bin/python -m statushub
+cd observer-frog/rust
+cargo build --release
+./target/release/observer-frog
 ```
 
 That serves `http://127.0.0.1:8770/`. No configuration is required to get value out of it: the
 machine's CPU, memory, disk and uptime show up immediately, and you start with zero services.
+
+With a certificate, the same binary speaks HTTPS itself:
+
+```bash
+./target/release/observer-frog --tls-cert cert.pem --tls-key key.pem --bind 0.0.0.0
+```
+
+A deployment looks like a staging area and a promotion step: build a candidate, run it beside the
+one in use against the same configuration, compare, then promote.
 
 ## Adding a service
 
@@ -29,11 +41,12 @@ There is a catalog of about fifty common self-hosted things, each with a default
 service exposes one, a signature that proves you are looking at it.
 
 ```bash
-.venv/bin/python -m statushub catalog             # everything available
-.venv/bin/python -m statushub catalog monitoring  # just one group
-.venv/bin/python -m statushub add syncthing       # prints a config block
-.venv/bin/python -m statushub add 9router --port 20127   # you moved it off the default
-.venv/bin/python -m statushub add sonarr --instance 2    # a second copy
+FROG=./target/release/observer-frog
+$FROG catalog             # everything available
+$FROG catalog monitoring  # just one group
+$FROG add syncthing       # prints a config block
+$FROG add 9router --port 20127   # you moved it off the default
+$FROG add sonarr --instance 2    # a second copy
 ```
 
 Paste the block into `config.toml`. A running server picks the change up without a restart.
@@ -117,14 +130,14 @@ surprise you. The catalog is a curated list, not a discovery engine.
 ## Checking a machine without starting the server
 
 ```bash
-.venv/bin/python -m statushub metrics   # this host's numbers
-.venv/bin/python -m statushub status    # resolved config and database
+$FROG metrics   # this host's numbers
+$FROG status    # resolved config and database
 ```
 
 ## Tests
 
 ```bash
-.venv/bin/python -m unittest discover -s tests -t .
+cd rust && cargo test        # 34 tests
 ```
 
 Every behavioural rule in `docs/DESIGN.md` has a test named after it, and the tests exist because
@@ -134,8 +147,15 @@ reading healthy for hours.
 
 ## How this was built, and by whom
 
-The code was written by an AI agent (Claude-class models running in Hermes Agent) under my direction.
-I did not type the Python, and I am not going to imply otherwise.
+The code was written by AI agents running in Hermes Agent, under my direction. I did not type it,
+and I am not going to imply otherwise.
+
+It began in Python, which is still on the `python-v0.1` branch, frozen. I moved to Rust for
+distribution: a 2.5 MB binary that needs no runtime and no extracted temp directory beats a 48 MB
+single-file Python executable that antivirus software flags. The port is verified rather than
+asserted. `rust/parity.py` runs both builds against the same configuration and compares every
+endpoint, every service state and every response shape; they serve byte-identical web assets. The
+Rust build uses 8 MB of memory where the Python one uses 40.
 
 What I did was the part that decides whether the result is any good. I set the constraints: native
 install only, no container, one binary with independent `serve` and `report_to` flags instead of a
@@ -150,6 +170,13 @@ The tests were written by the AI as well. That is worth knowing when you weigh t
 same understanding that produced the code, so they catch regressions in behaviour we already thought
 about, not mistakes we never considered. The bugs above were found by using the thing, not by the
 suite.
+
+The Rust port leans the other way, which is part of why I made it canonical. The compiler rejects
+whole classes of mistake that Python accepts silently, and the two most expensive bugs in the port
+were both caught by running it rather than compiling it: a process scan that returned an empty command
+line for every process unless asked for it explicitly, which made every process probe report "not
+running", and a TLS library that panics at first use unless a crypto provider is registered. Loud
+failures at the moment of use are worth more than a clean compile.
 
 What that means for you: read the code before you trust it with anything that matters, expect rough
 edges, and treat support as best-effort. The licence says the software comes with no warranty, and in
