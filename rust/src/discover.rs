@@ -138,38 +138,29 @@ pub fn discover(entries: &[Entry], host: &str) -> Vec<Service> {
     let listeners = listening();
     let mut found: Vec<Service> = Vec::new();
 
-    // Pass 1: HTTP entries, matched by signature on ANY listening port.
+    // Pass 1: HTTP entries whose catalog default port is listening, confirmed by signature.
     //
-    // Checking only the catalog's default port misses every service that runs elsewhere — a
-    // SearXNG on :8888 looks absent when the catalog says :8080. A signature hit is far stronger
-    // evidence than a port match, so port is only a hint about where to look.
-    for entry in entries.iter().filter(|e| e.probe == "http" && e.has_signature()) {
-        // The default port first: it is the common case and costs one request.
-        let mut candidates: Vec<u16> = Vec::new();
-        if entry.default_port > 0 && listeners.iter().any(|l| l.port == entry.default_port) {
-            candidates.push(entry.default_port);
+    // Port only, deliberately. A service running on a non-default port is the operator's
+    // business: picking a custom port belongs in the admin UI as an explicit choice, not in a
+    // discovery sweep that would have to probe every open port to guess. Signature verification
+    // stays, because a port match alone would claim any listener squatting on 3001 is Uptime Kuma.
+    for entry in entries.iter().filter(|e| e.probe == "http") {
+        if entry.default_port == 0 || !listeners.iter().any(|l| l.port == entry.default_port) {
+            continue;
         }
-        for l in &listeners {
-            if !candidates.contains(&l.port) {
-                candidates.push(l.port);
-            }
-        }
-
-        for port in candidates {
-            // A loopback service is still reachable at the loopback address; a wildcard listener
-            // answers on either. Use the host the caller gave.
-            let Ok(svc) = crate::catalog::instantiate(entry, host, Some(port), "") else { continue };
+        let Ok(svc) = crate::catalog::instantiate(entry, host, None, "") else { continue };
+        if entry.has_signature() {
             let (state, _, _) = crate::probes::probe_http(
                 &svc.target,
                 svc.expect_status,
                 &svc.contains,
-                svc.timeout.min(1.5),
+                svc.timeout,
             );
-            if state == crate::probes::STATE_UP {
-                found.push(svc);
-                break;
+            if state != crate::probes::STATE_UP {
+                continue; // something else is on that port
             }
         }
+        found.push(svc);
     }
 
     // Pass 2: TCP entries, matched on port only. A bare TCP check has no signature, so this can
