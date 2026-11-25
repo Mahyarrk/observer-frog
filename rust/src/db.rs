@@ -8,7 +8,7 @@ use rusqlite::{Connection, OpenFlags};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub const SCHEMA_VERSION: i64 = 5;
+pub const SCHEMA_VERSION: i64 = 6;
 pub const RAW_RETENTION_S: i64 = 86_400; // 24 h of per-check rows
 pub const ROLLUP_RETENTION_S: i64 = 2_592_000; // 30 days of hourly counters
 
@@ -82,7 +82,10 @@ CREATE TABLE IF NOT EXISTS nodes (
     first_seen_ts INTEGER NOT NULL DEFAULT 0,
     last_seen_ts  INTEGER NOT NULL DEFAULT 0,
     reported_name TEXT    NOT NULL DEFAULT '',
-    display_name  TEXT    NOT NULL DEFAULT ''
+    display_name  TEXT    NOT NULL DEFAULT '',
+    -- The device card the node last reported: cpu, memory, disk, uptime, thermal. Stored as
+    -- JSON because the shape belongs to the probe side and the head only renders it.
+    metrics_json  TEXT    NOT NULL DEFAULT ''
 );
 "#;
 
@@ -215,6 +218,22 @@ pub fn init(path: &Path) -> rusqlite::Result<i64> {
                     [],
                 )?;
                 version = 5;
+            }
+            if version < 6 {
+                let has: bool = conn
+                    .query_row(
+                        "SELECT 1 FROM pragma_table_info('nodes') WHERE name='metrics_json'",
+                        [],
+                        |_| Ok(true),
+                    )
+                    .unwrap_or(false);
+                if !has {
+                    conn.execute(
+                        "ALTER TABLE nodes ADD COLUMN metrics_json TEXT NOT NULL DEFAULT ''",
+                        [],
+                    )?;
+                }
+                version = 6;
             }
             conn.execute(
                 "UPDATE schema_version SET version = ?, applied_ts = ?",

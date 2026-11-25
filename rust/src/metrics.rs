@@ -232,11 +232,17 @@ fn mac_chip() -> Option<String> {
 
 fn linux_cpu_model() -> Option<String> {
     let text = std::fs::read_to_string("/proc/cpuinfo").ok()?;
-    for line in text.lines() {
-        let lower = line.to_lowercase();
-        if lower.starts_with("model name") || lower.starts_with("hardware") || lower.starts_with("model") {
-            if let Some((_, v)) = line.split_once(':') {
-                return Some(v.trim().to_string());
+    // Order matters: x86 exposes both `model name:` (the real string) and `model:` (a numeric
+    // id). A loose prefix match picks up "model" first and the card reads "92 - Debian".
+    for key in ["model name", "hardware", "cpu model", "machine"] {
+        for line in text.lines() {
+            if line.to_lowercase().starts_with(key) {
+                if let Some((_, v)) = line.split_once(':') {
+                    let v = v.trim();
+                    if !v.is_empty() && v.parse::<i64>().is_err() {
+                        return Some(v.to_string());
+                    }
+                }
             }
         }
     }

@@ -142,18 +142,34 @@ impl App {
         });
 
         let (name, last_seen, interval) = node_meta(&self.cfg.db_path, node_id);
+        // The device card the node last measured, not a placeholder: cpu, memory, disk, uptime,
+        // thermal all come from the machine that can actually read them.
+        let mut card = stored_metrics(&self.cfg.db_path, node_id).unwrap_or_else(|| {
+            json!({
+                "id": format!("dev_{node_id}"),
+                "kind": "remote",
+                "detail": format!("reports every {interval}s"),
+            })
+        });
+        if let Some(obj) = card.as_object_mut() {
+            // The head is authoritative for the name and for whether the node is reachable.
+            obj.insert("id".into(), json!(format!("dev_{node_id}")));
+            obj.insert(
+                "name".into(),
+                json!(if name.is_empty() { node_id.to_string() } else { name }),
+            );
+            obj.insert("kind".into(), json!("remote"));
+            obj.insert(
+                "status".into(),
+                json!(if last_seen > 0 { "up" } else { "unknown" }),
+            );
+        }
         json!({
             "timestamp": last_seen,
             "node_ts": last_seen,
             "node": node_id,
             "services": services,
-            "devices": [{
-                "id": format!("dev_{node_id}"),
-                "name": if name.is_empty() { node_id.to_string() } else { name },
-                "kind": "remote",
-                "status": if last_seen > 0 { "up" } else { "unknown" },
-                "detail": format!("reports every {interval}s"),
-            }],
+            "devices": [card],
             "confirm_polls": state::DOWN_CONFIRM_POLLS,
         })
     }
@@ -255,6 +271,22 @@ impl App {
 /// The local node's history, the shape v0.1 clients expect.
 pub fn build_history(app: &App, days: i64) -> Value {
     build_history_for(app, &app.cfg.node_id.clone(), days)
+}
+
+/// The device card a node last reported, or None when it never sent one.
+fn stored_metrics(path: &std::path::Path, node_id: &str) -> Option<Value> {
+    let conn = db::connect(path).ok()?;
+    let text: String = conn
+        .query_row(
+            "SELECT metrics_json FROM nodes WHERE node_id = ?",
+            (node_id,),
+            |r| r.get(0),
+        )
+        .ok()?;
+    if text.trim().is_empty() {
+        return None;
+    }
+    serde_json::from_str(&text).ok()
 }
 
 /// A node's display name, last report time and interval. Zeros when the node is unknown.

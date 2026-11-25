@@ -75,6 +75,9 @@ pub struct Report {
     pub interval_s: i64,
     pub observed_at: i64,
     pub services: Option<Vec<ReportService>>,
+    /// The device card the tail measured: cpu, memory, disk, uptime, thermal. Opaque here;
+    /// the head stores and renders it rather than re-deriving it.
+    pub metrics: Option<serde_json::Value>,
 }
 
 /// Parse a report body. Returns Err with a client-facing message on a malformed payload.
@@ -138,6 +141,7 @@ pub fn parse(body: &[u8]) -> Result<Report, String> {
         interval_s,
         observed_at: doc.get("observed_at").and_then(|v| v.as_i64()).unwrap_or(0),
         services,
+        metrics: doc.get("metrics").filter(|v| v.is_object()).cloned(),
     })
 }
 
@@ -150,19 +154,34 @@ pub fn touch_node(
     token_digest: &str,
     at: i64,
 ) -> rusqlite::Result<()> {
+    touch_node_with_metrics(db_path, node_id, name, interval_s, token_digest, at, None)
+}
+
+/// As `touch_node`, but also stores the device card the node reported.
+pub fn touch_node_with_metrics(
+    db_path: &Path,
+    node_id: &str,
+    name: &str,
+    interval_s: i64,
+    token_digest: &str,
+    at: i64,
+    metrics: Option<&serde_json::Value>,
+) -> rusqlite::Result<()> {
     let conn = db::connect(db_path)?;
     // `name` mirrors reported_name for anything still reading the v3 column; reported_name is
     // the device's own word and is never overwritten by a display override.
+    let metrics_json = metrics.map(|m| m.to_string()).unwrap_or_default();
     conn.execute(
-        "INSERT INTO nodes (node_id, name, reported_name, interval_s, token_sha256, first_seen_ts, last_seen_ts) \
-         VALUES (?,?,?,?,?,?,?) \
+        "INSERT INTO nodes (node_id, name, reported_name, interval_s, token_sha256, first_seen_ts, last_seen_ts, metrics_json) \
+         VALUES (?,?,?,?,?,?,?,?) \
          ON CONFLICT(node_id) DO UPDATE SET \
            name = CASE WHEN excluded.name <> '' THEN excluded.name ELSE nodes.name END, \
            reported_name = CASE WHEN excluded.reported_name <> '' THEN excluded.reported_name ELSE nodes.reported_name END, \
            interval_s = CASE WHEN excluded.interval_s > 0 THEN excluded.interval_s ELSE nodes.interval_s END, \
            token_sha256 = CASE WHEN excluded.token_sha256 <> '' THEN excluded.token_sha256 ELSE nodes.token_sha256 END, \
-           last_seen_ts = excluded.last_seen_ts",
-        (node_id, name, name, interval_s.max(0), token_digest, at, at),
+           last_seen_ts = excluded.last_seen_ts, \
+           metrics_json = CASE WHEN excluded.metrics_json <> '' THEN excluded.metrics_json ELSE nodes.metrics_json END",
+        (node_id, name, name, interval_s.max(0), token_digest, at, at, metrics_json),
     )?;
     Ok(())
 }
@@ -237,13 +256,14 @@ pub fn handle_report(app: &App, req_headers: &std::collections::HashMap<String, 
     }
 
     let head_now = db::now();
-    if let Err(e) = touch_node(
+    if let Err(e) = touch_node_with_metrics(
         &app.cfg.db_path,
         &report.node_id,
         &report.node_name,
         report.interval_s,
         &token_digest(token),
         head_now,
+        report.metrics.as_ref(),
     ) {
         return (500, json!({"ok": false, "error": format!("cannot register node: {e}")}));
     }
@@ -292,6 +312,38 @@ mod tests {
         let empty = body(json!({"node": {"id": "a"}, "observed_at": 1, "services": []}));
         let r = parse(&empty).unwrap();
         assert_eq!(r.services.unwrap().len(), 0);
+    }
+
+    #[test]
+    fn metrics_ride_the_report_and_are_stored() {
+        // A head cannot read a tail's cpu or memory; it must keep what the tail measured.
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("m.db");
+        crate::db::init(&db).unwrap();
+        let metrics = serde_json::json!({"cpu_pct": 12.5, "mem_used": "3.1/4 GB", "uptime_h": 42.0});
+        touch_node_with_metrics(&db, "laptop", "Laptop", 30, "tok", 1_000, Some(&metrics)).unwrap();
+        let conn = crate::db::connect(&db).unwrap();
+        let stored: String = conn
+            .query_row("SELECT metrics_json FROM nodes WHERE node_id='laptop'", [], |r| r.get(0))
+            .unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&stored).unwrap();
+        assert_eq!(parsed["cpu_pct"], 12.5);
+        assert_eq!(parsed["mem_used"], "3.1/4 GB");
+    }
+
+    #[test]
+    fn a_later_report_without_metrics_keeps_the_old_ones() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("keep.db");
+        crate::db::init(&db).unwrap();
+        let metrics = serde_json::json!({"cpu_pct": 5.0});
+        touch_node_with_metrics(&db, "laptop", "Laptop", 30, "tok", 1_000, Some(&metrics)).unwrap();
+        touch_node_with_metrics(&db, "laptop", "Laptop", 30, "tok", 1_060, None).unwrap();
+        let conn = crate::db::connect(&db).unwrap();
+        let stored: String = conn
+            .query_row("SELECT metrics_json FROM nodes WHERE node_id='laptop'", [], |r| r.get(0))
+            .unwrap();
+        assert!(stored.contains("cpu_pct"), "a heartbeat must not wipe the last known metrics");
     }
 
     #[test]
