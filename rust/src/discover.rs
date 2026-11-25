@@ -71,32 +71,89 @@ fn parse_ss(text: &str) -> Vec<Listener> {
     out
 }
 
+/// Which process IDs hold `port`, so the poller can attribute memory to a listening service.
+///
+/// Reads the same socket tables discovery already trusts rather than shelling out to `lsof -t`
+/// separately: one command, one parse, same answer. macOS reports the PID in column 2; Linux only
+/// reports it under elevation, so an empty result there means "cannot attribute", not "no service".
+pub fn pids_listening_on(port: u16) -> Vec<u32> {
+    let text = socket_table();
+    let mut out = Vec::new();
+    if cfg!(target_os = "macos") {
+        for line in text.lines().skip(1) {
+            let cols: Vec<&str> = line.split_whitespace().collect();
+            if cols.len() < 9 {
+                continue;
+            }
+            let Some(name) = cols.iter().rev().find(|c| c.contains(':') && port_from_addr(c).is_some()) else {
+                continue;
+            };
+            if port_from_addr(name) != Some(port) {
+                continue;
+            }
+            if let Ok(pid) = cols[1].parse::<u32>() {
+                if !out.contains(&pid) {
+                    out.push(pid);
+                }
+            }
+        }
+    } else {
+        for line in text.lines() {
+            let cols: Vec<&str> = line.split_whitespace().collect();
+            if cols.len() < 4 || port_from_addr(cols[3]) != Some(port) {
+                continue;
+            }
+            // users:(("xray",pid=454916,fd=7))
+            for part in line.split("pid=").skip(1) {
+                let digits: String = part.chars().take_while(|c| c.is_ascii_digit()).collect();
+                if let Ok(pid) = digits.parse::<u32>() {
+                    if !out.contains(&pid) {
+                        out.push(pid);
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
 /// Extract the port from `*:8770`, `127.0.0.1:8770`, `[::1]:8770` or `[::]:8770`.
 fn port_from_addr(addr: &str) -> Option<u16> {
     let tail = addr.rsplit(':').next()?;
     tail.parse::<u16>().ok()
 }
 
-/// Every TCP port this machine is listening on, deduplicated and sorted.
-pub fn listening() -> Vec<Listener> {
-    let mut all: Vec<Listener> = Vec::new();
-
+/// Raw socket table, exactly as the OS prints it. One shell-out, shared by every caller so a
+/// PID lookup cannot disagree with the port list.
+fn socket_table() -> String {
     if cfg!(target_os = "macos") {
         if let Ok(out) = std::process::Command::new("lsof")
             .args(["-nP", "-iTCP", "-sTCP:LISTEN"])
             .output()
         {
-            all = parse_lsof(&String::from_utf8_lossy(&out.stdout));
+            return String::from_utf8_lossy(&out.stdout).to_string();
         }
+        String::new()
     } else {
-        if let Ok(out) = std::process::Command::new("ss").args(["-lntH"]).output() {
-            all = parse_ss(&String::from_utf8_lossy(&out.stdout));
-        }
-        // Fall back to /proc when ss is missing, which happens on minimal images.
-        if all.is_empty() {
-            all = listening_from_proc();
-        }
+        std::process::Command::new("ss")
+            .args(["-lntH"])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+            .unwrap_or_default()
     }
+}
+
+/// Every TCP port this machine is listening on, deduplicated and sorted.
+pub fn listening() -> Vec<Listener> {
+    let text = socket_table();
+
+    let all: Vec<Listener> = if cfg!(target_os = "macos") {
+        parse_lsof(&text)
+    } else {
+        let ss = parse_ss(&text);
+        // Fall back to /proc when ss is missing, which happens on minimal images.
+        if ss.is_empty() { listening_from_proc() } else { ss }
+    };
 
     // One entry per port: several processes can share a port across address families.
     let mut seen: BTreeMap<u16, Listener> = BTreeMap::new();
@@ -134,6 +191,91 @@ fn listening_from_proc() -> Vec<Listener> {
 /// A catalog entry becomes a service when its default port is listening AND its signature
 /// verifies. Entries with no signature are accepted on the port alone, which is why the catalog
 /// marks those as unsigned.
+/// One catalog entry as the add-service page should see it.
+///
+/// Three buckets, and every item carries its evidence. `port-taken` is named rather than hidden:
+/// "port 5000 is AirPlay" is the single most useful fact on that page, and silently omitting it is
+/// how a Frigate ends up monitored on a Mac that has never run it.
+pub struct Candidate {
+    pub id: String,
+    pub name: String,
+    pub group: String,
+    pub probe: String,
+    pub default_port: u16,
+    pub expected_off: bool,
+    pub state: &'static str,
+    pub detail: String,
+}
+
+pub const CAND_AVAILABLE: &str = "available";
+pub const CAND_NOT_RUNNING: &str = "not-running";
+pub const CAND_PORT_TAKEN: &str = "port-taken";
+pub const CAND_ALREADY: &str = "already-monitored";
+
+/// Classify every catalog entry against what this machine is actually running.
+pub fn candidates(entries: &[Entry], host: &str, monitored: &[String]) -> Vec<Candidate> {
+    let listeners = listening();
+    let mut out = Vec::new();
+    for entry in entries {
+        let mut state = CAND_NOT_RUNNING;
+        let mut detail = String::new();
+
+        if monitored.iter().any(|m| m == &entry.id) {
+            state = CAND_ALREADY;
+            detail = "already on this dashboard".into();
+        } else if entry.probe == "http" || entry.probe == "tcp" {
+            match entry.default_port {
+                0 => {}
+                port => {
+                    let holder = listeners.iter().find(|l| l.port == port);
+                    match holder {
+                        None => {
+                            state = CAND_NOT_RUNNING;
+                            detail = format!("nothing listening on {port}");
+                        }
+                        Some(l) => {
+                            // Verify identity. A port match alone is not evidence: AirPlay holds
+                            // 5000 and answers 403, which a signature-less entry read as "up".
+                            if entry.probe == "http" && entry.has_signature() {
+                                let Ok(svc) = crate::catalog::instantiate(entry, host, None, "") else {
+                                    continue;
+                                };
+                                let (probe_state, _, _) = crate::probes::probe_http(
+                                    &svc.target,
+                                    svc.expect_status,
+                                    &svc.contains,
+                                    svc.timeout,
+                                );
+                                if probe_state == crate::probes::STATE_UP {
+                                    state = CAND_AVAILABLE;
+                                    detail = format!("listening on {port}, signature matched");
+                                } else {
+                                    state = CAND_PORT_TAKEN;
+                                    detail = format!("port {port} is held by {}", l.process);
+                                }
+                            } else if entry.probe == "tcp" {
+                                state = CAND_AVAILABLE;
+                                detail = format!("listening on {port} (tcp, no signature to verify)");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        out.push(Candidate {
+            id: entry.id.clone(),
+            name: entry.name.clone(),
+            group: entry.group.clone(),
+            probe: entry.probe.clone(),
+            default_port: entry.default_port,
+            expected_off: entry.expected_off,
+            state,
+            detail,
+        });
+    }
+    out
+}
+
 pub fn discover(entries: &[Entry], host: &str) -> Vec<Service> {
     let listeners = listening();
     let mut found: Vec<Service> = Vec::new();

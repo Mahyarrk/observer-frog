@@ -735,6 +735,31 @@ fn route(req: &Request, app: &Arc<App>) -> (u16, String, Vec<u8>, bool) {
                 Err(e) => (400, json_ct, json_bytes(&json!({"ok": false, "error": e})), false),
             }
         }
+        ("GET" | "HEAD", _) if normalized == "/api/discover/services" => {
+            let entries = crate::catalog::load(None).unwrap_or_default();
+            let cfg = crate::config::load(Some(&crate::settings::target(&app.cfg)))
+                .unwrap_or_else(|_| app.cfg.clone());
+            let monitored: Vec<String> = cfg.services.iter().map(|s| s.id.clone()).collect();
+            let cands = crate::discover::candidates(&entries, "127.0.0.1", &monitored);
+            let bucket = |kind: &str| -> Vec<Value> {
+                cands
+                    .iter()
+                    .filter(|c| c.state == kind)
+                    .map(|c| json!({
+                        "id": c.id, "name": c.name, "group": c.group,
+                        "probe": c.probe, "default_port": c.default_port,
+                        "expected_off": c.expected_off, "detail": c.detail,
+                    }))
+                    .collect()
+            };
+            (200, json_ct, json_bytes(&json!({
+                "ok": true,
+                "available": bucket(crate::discover::CAND_AVAILABLE),
+                "not_running": bucket(crate::discover::CAND_NOT_RUNNING),
+                "port_taken": bucket(crate::discover::CAND_PORT_TAKEN),
+                "already": bucket(crate::discover::CAND_ALREADY),
+            })), false)
+        }
         ("GET" | "HEAD", _) if normalized == "/api/catalog" => {
             let entries = crate::catalog::load(None).unwrap_or_default();
             let out: Vec<Value> = entries

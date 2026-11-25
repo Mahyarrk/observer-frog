@@ -1,12 +1,18 @@
 # observer-frog service catalog — data, not code.
 #
-# An entry compiles to one of the five probe kinds. `verify_contains` is what stops a
-# coincidence on a port from being reported as this service: discovery may only *propose* an
-# entry whose signature passes, and the probe reports `degraded` when the signature is missing.
+# An entry is a *template*, never a service: `instantiate()` combines it with a host and port. The
+# default port is a hint for discovery, never an identity.
 #
-# Contribute an entry: copy the closest block below, keep `id` lowercase and stable, set
-# `default_port`, and add `verify_path` + `verify_contains` for anything that speaks HTTP.
-# If it cannot be expressed as http/tcp/process/file_age/file_json, it does not belong here.
+# THE RULE THAT MATTERS: every `http` entry carries `verify_contains`, the fragment that proves a
+# listener on that port is this service and not a coincidence. macOS AirPlay holds port 5000, so
+# "something answered" must never be enough. `parse()` rejects an entry that lacks one.
+#
+# `expected_off` marks software that is installed but normally not running. It still reports and
+# still alerts on transitions; it is only excluded from uptime arithmetic, which would otherwise
+# read 0% for ever.
+#
+# Scope: recognisable third-party software only. A private script, cron job or one-off service
+# belongs in the user's own config — the catalog is a starting point, not a subscription.
 
 [[catalog]]
 id = "9router"
@@ -15,53 +21,18 @@ group = "Model Routing"
 probe = "http"
 default_port = 20128
 verify_path = "/"
-verify_contains = "/dashboard"     # 307 redirect target; distinguishes it from any other :20128
-notes = "LLM model router. Home redirects to /dashboard."
+verify_contains = "AI Infrastructure Management"   # the served page title, after the /dashboard redirect
+notes = "LLM model router. / redirects to /dashboard, whose title is '9Router - AI Infrastructure Management'."
 
 [[catalog]]
-id = "uptime-kuma"
-name = "Uptime Kuma"
-group = "Monitoring"
+id = "hermes"
+name = "Hermes Agent"
+group = "Agents"
 probe = "http"
-default_port = 3001
-verify_path = "/api/entry-page"
-verify_contains = "type"
-
-[[catalog]]
-id = "grafana"
-name = "Grafana"
-group = "Monitoring"
-probe = "http"
-default_port = 3000
+default_port = 9119
 verify_path = "/api/health"
-verify_contains = "database"
-
-[[catalog]]
-id = "prometheus"
-name = "Prometheus"
-group = "Monitoring"
-probe = "http"
-default_port = 9090
-verify_path = "/-/healthy"
-verify_contains = "Prometheus"
-
-[[catalog]]
-id = "node-exporter"
-name = "Node Exporter"
-group = "Monitoring"
-probe = "http"
-default_port = 9100
-verify_path = "/metrics"
-verify_contains = "node_cpu_seconds_total"
-
-[[catalog]]
-id = "ntfy"
-name = "ntfy"
-group = "Monitoring"
-probe = "http"
-default_port = 2586
-verify_path = "/v1/health"
-verify_contains = ""
+verify_contains = "displayVersion"
+notes = "Nous Research Hermes Agent. /api/health returns {ok, version, displayVersion, commit}."
 
 [[catalog]]
 id = "syncthing"
@@ -71,15 +42,7 @@ probe = "http"
 default_port = 8384
 verify_path = "/rest/noauth/health"
 verify_contains = "OK"
-
-[[catalog]]
-id = "searxng"
-name = "SearXNG"
-group = "Search"
-probe = "http"
-default_port = 8080
-verify_path = "/"
-verify_contains = "searxng"
+notes = "File sync. The health endpoint answers {\"status\": \"OK\"} without a token."
 
 [[catalog]]
 id = "v2raya"
@@ -88,327 +51,27 @@ group = "Proxy"
 probe = "http"
 default_port = 2017
 verify_path = "/api/touch"
-verify_contains = ""
-notes = "Admin UI. 401 on the API is healthy too."
-
-[[catalog]]
-id = "vocechat"
-name = "VoceChat"
-group = "Chat"
-probe = "http"
-default_port = 3009
-verify_path = "/"
-verify_contains = "VoceChat"
+verify_contains = "SESSION_INVALID"
+notes = "Web UI for v2ray/xray. An unauthenticated GET answers errorCode SESSION_INVALID."
 
 [[catalog]]
 id = "xray"
 name = "Xray"
 group = "Proxy"
 probe = "process"
-default_port = 0
 process_match = "xray run"
+notes = "Proxy core. Identified by process: its inbounds are user-configured, so no port is implied."
 
 [[catalog]]
-id = "sing-box"
-name = "sing-box"
-group = "Proxy"
-probe = "process"
-default_port = 0
-process_match = "sing-box run"
-
-[[catalog]]
-id = "wireguard"
-name = "WireGuard"
-group = "Network"
-probe = "process"
-default_port = 0
-process_match = "wireguard-go"
-
-[[catalog]]
-id = "tailscale"
-name = "Tailscale"
-group = "Network"
-probe = "process"
-default_port = 0
-process_match = "tailscaled"
-
-[[catalog]]
-id = "docker"
-name = "Docker"
-group = "Containers"
-probe = "process"
-default_port = 0
-process_match = "dockerd"
-
-[[catalog]]
-id = "portainer"
-name = "Portainer"
-group = "Containers"
+id = "lmstudio"
+name = "LM Studio"
+group = "Local LLM"
 probe = "http"
-default_port = 9443
-verify_path = "/api/system/status"
-verify_contains = ""
-
-[[catalog]]
-id = "nginx"
-name = "nginx"
-group = "Web"
-probe = "http"
-default_port = 80
-verify_path = "/"
-verify_contains = "nginx"
-
-[[catalog]]
-id = "caddy"
-name = "Caddy"
-group = "Web"
-probe = "http"
-default_port = 2019
-verify_path = "/config/"
-verify_contains = ""
-
-[[catalog]]
-id = "traefik"
-name = "Traefik"
-group = "Web"
-probe = "http"
-default_port = 8080
-verify_path = "/ping"
-verify_contains = "OK"
-
-[[catalog]]
-id = "postgres"
-name = "PostgreSQL"
-group = "Databases"
-probe = "tcp"
-default_port = 5432
-
-[[catalog]]
-id = "mysql"
-name = "MySQL / MariaDB"
-group = "Databases"
-probe = "tcp"
-default_port = 3306
-
-[[catalog]]
-id = "redis"
-name = "Redis"
-group = "Databases"
-probe = "tcp"
-default_port = 6379
-
-[[catalog]]
-id = "mongodb"
-name = "MongoDB"
-group = "Databases"
-probe = "tcp"
-default_port = 27017
-
-[[catalog]]
-id = "influxdb"
-name = "InfluxDB"
-group = "Databases"
-probe = "http"
-default_port = 8086
-verify_path = "/health"
-verify_contains = "pass"
-
-[[catalog]]
-id = "gitea"
-name = "Gitea"
-group = "Development"
-probe = "http"
-default_port = 3000
-verify_path = "/api/v1/version"
-verify_contains = "version"
-
-[[catalog]]
-id = "forgejo"
-name = "Forgejo"
-group = "Development"
-probe = "http"
-default_port = 3000
-verify_path = "/api/v1/version"
-verify_contains = "version"
-
-[[catalog]]
-id = "jenkins"
-name = "Jenkins"
-group = "Development"
-probe = "http"
-default_port = 8080
-verify_path = "/login"
-verify_contains = "Jenkins"
-
-[[catalog]]
-id = "nextcloud"
-name = "Nextcloud"
-group = "Files"
-probe = "http"
-default_port = 80
-verify_path = "/status.php"
-verify_contains = "installed"
-
-[[catalog]]
-id = "immich"
-name = "Immich"
-group = "Files"
-probe = "http"
-default_port = 2283
-verify_path = "/api/server-info/ping"
-verify_contains = "pong"
-
-[[catalog]]
-id = "filebrowser"
-name = "Filebrowser"
-group = "Files"
-probe = "http"
-default_port = 8080
-verify_path = "/api/health"
-verify_contains = ""
-
-[[catalog]]
-id = "minio"
-name = "MinIO"
-group = "Files"
-probe = "http"
-default_port = 9000
-verify_path = "/minio/health/live"
-verify_contains = ""
-
-[[catalog]]
-id = "jellyfin"
-name = "Jellyfin"
-group = "Media"
-probe = "http"
-default_port = 8096
-verify_path = "/health"
-verify_contains = ""
-notes = "Also matches Emby on the same port."
-
-[[catalog]]
-id = "plex"
-name = "Plex"
-group = "Media"
-probe = "http"
-default_port = 32400
-verify_path = "/identity"
-verify_contains = "Plex"
-
-[[catalog]]
-id = "navidrome"
-name = "Navidrome"
-group = "Media"
-probe = "http"
-default_port = 4533
-verify_path = "/ping"
-verify_contains = "ok"
-
-[[catalog]]
-id = "sonarr"
-name = "Sonarr"
-group = "Media"
-probe = "http"
-default_port = 8989
-verify_path = "/api/v3/system/status"
-verify_contains = ""
-
-[[catalog]]
-id = "radarr"
-name = "Radarr"
-group = "Media"
-probe = "http"
-default_port = 7878
-verify_path = "/api/v3/system/status"
-verify_contains = ""
-
-[[catalog]]
-id = "prowlarr"
-name = "Prowlarr"
-group = "Media"
-probe = "http"
-default_port = 9696
-verify_path = "/api/v1/system/status"
-verify_contains = ""
-
-[[catalog]]
-id = "qbittorrent"
-name = "qBittorrent"
-group = "Media"
-probe = "http"
-default_port = 8080
-verify_path = "/api/v2/app/version"
-verify_contains = ""
-
-[[catalog]]
-id = "home-assistant"
-name = "Home Assistant"
-group = "Home"
-probe = "http"
-default_port = 8123
-verify_path = "/manifest.json"
-verify_contains = "Home"
-
-[[catalog]]
-id = "mosquitto"
-name = "Mosquitto"
-group = "Home"
-probe = "tcp"
-default_port = 1883
-
-[[catalog]]
-id = "zigbee2mqtt"
-name = "zigbee2mqtt"
-group = "Home"
-probe = "http"
-default_port = 8080
-verify_path = "/"
-verify_contains = "zigbee2mqtt"
-
-[[catalog]]
-id = "adguard"
-name = "AdGuard Home"
-group = "Network"
-probe = "http"
-default_port = 3000
-verify_path = "/control/status"
-verify_contains = ""
-
-[[catalog]]
-id = "pihole"
-name = "Pi-hole"
-group = "Network"
-probe = "http"
-default_port = 80
-verify_path = "/admin/"
-verify_contains = "Pi-hole"
-
-[[catalog]]
-id = "vaultwarden"
-name = "Vaultwarden"
-group = "Security"
-probe = "http"
-default_port = 8080
-verify_path = "/alive"
-verify_contains = ""
-
-[[catalog]]
-id = "paperless"
-name = "Paperless-ngx"
-group = "Documents"
-probe = "http"
-default_port = 8000
-verify_path = "/api/status/"
-verify_contains = ""
-
-[[catalog]]
-id = "frigate"
-name = "Frigate"
-group = "Cameras"
-probe = "http"
-default_port = 5000
-verify_path = "/api/version"
-verify_contains = ""
+default_port = 1234
+verify_path = "/v1/models"
+verify_contains = "data"
+expected_off = true
+notes = "Local LLM server, OpenAI-compatible /v1/models. Normally started by hand."
 
 [[catalog]]
 id = "ollama"
@@ -420,23 +83,88 @@ verify_path = "/api/version"
 verify_contains = "version"
 
 [[catalog]]
-id = "lm-studio"
-name = "LM Studio Server"
-group = "Local LLM"
+id = "nginx"
+name = "Nginx"
+group = "Web"
 probe = "http"
-default_port = 1234
-verify_path = "/v1/models"
-verify_contains = "data"
-notes = "Must be started by the user; reads as down when the server is not running."
+default_port = 80
+verify_path = "/"
+verify_contains = "nginx"
+notes = "Reverse proxy. The stock page names nginx; a site config should override the path."
 
 [[catalog]]
-id = "hermes"
-name = "Hermes"
-group = "Agents"
+id = "sunshine"
+name = "Sunshine"
+group = "Streaming"
+probe = "tcp"
+default_port = 47990
+notes = "Game-streaming host (Moonlight). 47984/47989/47990 + 48010; 47990 is the HTTPS web UI."
+
+[[catalog]]
+id = "docker"
+name = "Docker"
+group = "Containers"
+probe = "process"
+process_match = "com.docker.backend"
+notes = "Daemon. Containers are enumerated through the runtime, not as ordinary listeners."
+
+[[catalog]]
+id = "portainer"
+name = "Portainer"
+group = "Containers"
 probe = "http"
-default_port = 9119
+default_port = 9443
+verify_path = "/api/system/status"
+verify_contains = "Portainer"
+
+[[catalog]]
+id = "ntfy"
+name = "ntfy"
+group = "Monitoring"
+probe = "http"
+default_port = 2586
+verify_path = "/v1/health"
+verify_contains = "healthy"
+notes = "/v1/health answers {\"healthy\":true}."
+
+[[catalog]]
+id = "vocechat"
+name = "VoceChat"
+group = "Messaging"
+probe = "http"
+default_port = 3009
 verify_path = "/"
-verify_contains = ""
+verify_contains = "VoceChat"
+notes = "Self-hosted chat. The web client's title is 'VoceChat WebAPP'."
+
+[[catalog]]
+id = "searxng"
+name = "SearXNG"
+group = "Search"
+probe = "http"
+default_port = 8080
+verify_path = "/"
+verify_contains = "SearXNG"
+notes = "Metasearch. The landing page names SearXNG. Defaults to 8080; deployments often move it."
+
+[[catalog]]
+id = "vaultwarden"
+name = "Vaultwarden"
+group = "Security"
+probe = "http"
+default_port = 80
+verify_path = "/alive"
+verify_contains = "T"
+notes = "Password manager. /alive answers a bare RFC-3339 timestamp, e.g. \"2026-01-01T00:00:00Z\"."
+
+[[catalog]]
+id = "terraria"
+name = "Terraria Server"
+group = "Game Servers"
+probe = "tcp"
+default_port = 7777
+expected_off = true
+notes = "Terraria dedicated server. Usually off between sessions."
 
 [[catalog]]
 id = "ssh"
@@ -444,3 +172,20 @@ name = "SSH"
 group = "Remote Access"
 probe = "tcp"
 default_port = 22
+notes = "A TCP handshake is the only proof available; there is no body to sign."
+
+[[catalog]]
+id = "wireguard"
+name = "WireGuard"
+group = "Network"
+probe = "process"
+process_match = "wireguard-go"
+notes = "Userspace WireGuard. A process probe: the tunnel has no listening socket to sign."
+
+[[catalog]]
+id = "tailscale"
+name = "Tailscale"
+group = "Network"
+probe = "process"
+process_match = "tailscaled"
+notes = "Mesh VPN daemon. It listens on ephemeral ports, so it is identified by process."

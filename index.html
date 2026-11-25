@@ -464,6 +464,17 @@
       border: 1px solid var(--down-border);
     }
     .settings-remove:hover { background: var(--down-bg); }
+    .settings-add-panel {
+      display: flex; flex-direction: column; gap: 10px;
+      margin-top: 10px; padding-top: 12px;
+      border-top: 1px solid var(--border-subtle);
+    }
+    .settings-sub {
+      font-size: 12px; font-weight: 600; margin: 6px 0 0; opacity: .85;
+      letter-spacing: .02em;
+    }
+    .settings-custom { display: flex; flex-direction: column; gap: 8px; }
+    .settings-cand-taken { opacity: .75; }
     .settings-head {
       display: flex; justify-content: space-between; align-items: center; gap: 10px;
       padding: 10px 12px; border-radius: 9px;
@@ -1850,12 +1861,41 @@
             can be pasted as a config block.
           </p>
           <div id="set-services" class="settings-heads"></div>
-          <div class="settings-add">
-            <select id="set-catalog" class="settings-select"></select>
-            <input type="number" id="set-catalog-port" placeholder="port (optional)" min="1" max="65535" />
-            <button class="settings-btn" id="set-add-service" type="button">Add</button>
-          </div>
           <p class="settings-note" id="set-services-note"></p>
+          <button class="settings-btn" id="set-add-open" type="button">Add service</button>
+
+          <div id="set-add-panel" class="settings-add-panel" hidden>
+            <h3 class="settings-sub">Running on this machine</h3>
+            <p class="settings-hint">Only a service whose signature checks out appears here.</p>
+            <div id="set-cand-available" class="settings-heads"></div>
+
+            <h3 class="settings-sub">Installed, not running</h3>
+            <div id="set-cand-notrunning" class="settings-heads"></div>
+
+            <h3 class="settings-sub" id="set-cand-taken-title" hidden>Port held by something else</h3>
+            <p class="settings-hint" id="set-cand-taken-hint" hidden>
+              These cannot be added on their default port — something else is using it.
+            </p>
+            <div id="set-cand-taken" class="settings-heads"></div>
+
+            <div class="settings-add">
+              <button class="settings-btn" id="set-not-listed" type="button">
+                Your service is not here?
+              </button>
+            </div>
+            <div id="set-custom" class="settings-custom" hidden>
+              <p class="settings-hint">
+                Pick any supported service, then give the port it actually listens on. The same
+                signature check runs before it is accepted.
+              </p>
+              <div class="settings-add">
+                <select id="set-catalog" class="settings-select"></select>
+                <input type="number" id="set-catalog-port" placeholder="port" min="1" max="65535" />
+                <button class="settings-btn" id="set-add-service" type="button">Verify and add</button>
+              </div>
+            </div>
+            <p class="settings-note" id="set-add-note"></p>
+          </div>
         </div>
 
         <div class="settings-card">
@@ -1973,7 +2013,7 @@
       const API_BASE = (window.location.pathname.replace(/\/$/, '') || '');
       // Bump on every shell change. Declared before first use: a `const` referenced above its
       // declaration throws a TDZ error and takes the whole script down (it did).
-      const BUILD = 'of-9';
+      const BUILD = 'of-10';
       // Show the address actually in use, not a baked-in host.
       (function () {
         const el = document.getElementById('brand-url');
@@ -2250,7 +2290,11 @@
 
       function renderRam(ramMb) {
         const mb = Number(ramMb);
-        if (!Number.isFinite(mb) || mb <= 0) return '';
+        // An unresolvable figure is shown as a dash, never silently dropped and never "0 MB":
+        // a zero reads as "this service uses no memory", which is a claim we have not made.
+        if (!Number.isFinite(mb) || mb <= 0) {
+          return `<span class="latency-badge" title="Memory could not be attributed to this service">◆ —</span>`;
+        }
         const label = mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${Math.round(mb)} MB`;
         return `<span class="latency-badge" title="Resident RAM (all processes of this service)">◆ ${label}</span>`;
       }
@@ -2522,7 +2566,7 @@
 
                 <div class="card-bottom">
                   <div class="service-metrics">
-                    ${svc.ports ? `<span class="port-badge">:${escapeHtml(svc.ports)}</span>` : ''}
+                    <span class="port-badge" title="Listening port">${svc.ports ? ':' + escapeHtml(svc.ports) : ':—'}</span>
                     <span class="detail-badge" title="${escapeHtml(svc.detail)}">${escapeHtml(svc.detail || 'N/A')}</span>
                     ${renderLatency(svc.latency_ms)}
                     ${renderRam(svc.ram_mb)}
@@ -2819,6 +2863,91 @@
         }
       }
 
+      function candRow(item, opts) {
+        const row = document.createElement('div');
+        row.className = 'settings-head' + (opts.muted ? ' settings-cand-taken' : '');
+        const meta = document.createElement('div');
+        meta.className = 'settings-head-meta';
+        const nm = document.createElement('span');
+        nm.className = 'settings-head-name';
+        nm.textContent = item.name || item.id;
+        const det = document.createElement('span');
+        det.className = 'settings-head-url';
+        det.textContent = item.detail;
+        meta.appendChild(nm); meta.appendChild(det);
+        row.appendChild(meta);
+        if (opts.action) {
+          const b = document.createElement('button');
+          b.className = 'settings-btn';
+          b.type = 'button';
+          b.textContent = opts.action;
+          b.addEventListener('click', opts.onClick);
+          row.appendChild(b);
+        }
+        return row;
+      }
+
+      // The add flow: three buckets, each item carrying the evidence for its bucket.
+      async function loadCandidates() {
+        let d;
+        try { d = await (await fetch('api/discover/services', { cache: 'no-store' })).json(); } catch (_) { return; }
+        if (!d || !d.ok) return;
+        const note = document.getElementById('set-add-note');
+        const paint = (boxId, items, action, onClick, muted) => {
+          const box = document.getElementById(boxId);
+          if (!box) return;
+          box.textContent = '';
+          if (!items.length) {
+            const e = document.createElement('span');
+            e.className = 'settings-hint';
+            e.textContent = boxId === 'set-cand-available' ? 'Nothing new is running.' : 'Nothing here.';
+            box.appendChild(e);
+            return;
+          }
+          for (const it of items) {
+            box.appendChild(candRow(it, {
+              muted,
+              action,
+              onClick: onClick ? () => onClick(it) : null,
+            }));
+          }
+        };
+        const add = (it) => addCatalogService(it.id, it.default_port);
+        paint('set-cand-available', d.available, 'Add', add, false);
+        paint('set-cand-notrunning', d.not_running, 'Add', add, true);
+        // port-taken is shown, never offered: the port is not free, and saying who holds it is
+        // the single most useful fact on this panel.
+        const taken = d.port_taken || [];
+        const t = document.getElementById('set-cand-taken-title');
+        const th = document.getElementById('set-cand-taken-hint');
+        if (t) t.hidden = !taken.length;
+        if (th) th.hidden = !taken.length;
+        paint('set-cand-taken', taken, null, null, true);
+        if (note && !note.textContent) {
+          note.textContent = (d.already || []).length
+            ? (d.already.length + ' already monitored')
+            : '';
+        }
+      }
+
+      async function addCatalogService(cid, port) {
+        const note = document.getElementById('set-add-note');
+        try {
+          const body = { catalog_id: cid };
+          if (port) body.port = port;
+          const r = await fetch('api/services/add', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          });
+          const d = await r.json();
+          if (note) note.textContent = d.ok ? ('added ' + cid) : (d.error || 'add failed');
+          if (d.ok) {
+            loadServices();
+            loadCandidates();
+          }
+        } catch (e) { if (note) note.textContent = 'add failed: ' + e; }
+      }
+
       async function loadCatalog() {
         const sel = document.getElementById('set-catalog');
         if (!sel || sel.options.length) return;
@@ -2887,6 +3016,18 @@
             }
             settingsNote(d.detail || (want ? 'autostart on' : 'autostart off'));
           } catch (e) { settingsNote('could not change autostart: ' + e); }
+        });
+        on('set-add-open', async () => {
+          const panel = document.getElementById('set-add-panel');
+          if (!panel) return;
+          panel.hidden = !panel.hidden;
+          if (!panel.hidden) loadCandidates();
+        });
+        on('set-not-listed', () => {
+          const c = document.getElementById('set-custom');
+          if (!c) return;
+          c.hidden = !c.hidden;
+          if (!c.hidden) loadCatalog();
         });
         on('set-add-service', async () => {
           const sel = document.getElementById('set-catalog');

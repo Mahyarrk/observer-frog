@@ -14,9 +14,18 @@ use sysinfo::{ProcessesToUpdate, System};
 pub const MAX_WORKERS: usize = 12;
 pub const WAVE_BUDGET_FRACTION: f64 = 0.8;
 
+/// One process in the wave snapshot.
+pub struct Proc {
+    pub pid: u32,
+    pub parent: Option<u32>,
+    pub cmd_lower: String,
+    pub cmd: String,
+    pub rss_mb: f64,
+}
+
 /// Start-of-wave process table, so N services cost one scan instead of N scans.
 pub struct Snapshot {
-    rows: Vec<(String, String, f64)>, // (cmdline_lower, cmdline, rss_mb)
+    rows: Vec<Proc>,
     pub ok: bool,
     pub excluded: Vec<u32>,
 }
@@ -41,24 +50,72 @@ impl Snapshot {
             let cmd = p.cmd().iter().map(|c| c.to_string_lossy()).collect::<Vec<_>>().join(" ");
             let cmd = if cmd.is_empty() { p.name().to_string_lossy().to_string() } else { cmd };
             let rss = p.memory() as f64 / (1024.0 * 1024.0);
-            rows.push((cmd.to_lowercase(), cmd, (rss * 10.0).round() / 10.0));
+            rows.push(Proc {
+                pid: pid.as_u32(),
+                parent: p.parent().map(|q| q.as_u32()),
+                cmd_lower: cmd.to_lowercase(),
+                cmd,
+                rss_mb: (rss * 10.0).round() / 10.0,
+            });
         }
         Self { rows, ok: true, excluded }
     }
 
-    /// Return (found, cmdline, rss_mb) for the first process whose cmdline contains needle.
+    /// Return (found, cmdline, rss_mb) for the first process whose cmdline contains `needle`.
+    ///
+    /// Used by `process` probes, where the needle is the service's own process name.
     pub fn match_needle(&self, needle: &str) -> (bool, String, f64) {
         let needle = needle.to_lowercase();
-        for (low, cmd, rss) in &self.rows {
-            if low.contains(&needle) {
-                return (true, cmd.clone(), *rss);
-            }
+        match self.rows.iter().find(|r| r.cmd_lower.contains(&needle)) {
+            Some(r) => (true, r.cmd.clone(), r.rss_mb),
+            None => (false, String::new(), 0.0),
         }
-        (false, String::new(), 0.0)
     }
 
     pub fn size(&self) -> usize {
         self.rows.len()
+    }
+
+    /// Total RSS (MB) for every process whose command line mentions `needle`, summed.
+    ///
+    /// Summing is deliberate: Syncthing runs two processes, and reporting one would understate it.
+    /// `None` when nothing matches, so the UI renders "—" instead of a confident `0 MB`.
+    pub fn rss_for(&self, needle: &str) -> Option<f64> {
+        let needle = needle.trim().to_lowercase();
+        if needle.is_empty() {
+            return None;
+        }
+        let matched: Vec<&Proc> = self.rows.iter().filter(|r| r.cmd_lower.contains(&needle)).collect();
+        if matched.is_empty() {
+            return None;
+        }
+        let total: f64 = matched.iter().map(|r| r.rss_mb).sum();
+        Some((total * 10.0).round() / 10.0)
+    }
+
+    /// Total RSS (MB) for the process holding `port`, plus its direct children.
+    ///
+    /// A listening service often forks a worker (nginx master/worker, a Node supervisor), so
+    /// crediting only the socket holder understates it. The PID is resolved from the socket table
+    /// and then matched inside this snapshot — no second process scan, which is the point of I12.
+    pub fn rss_for_port(&self, port: u16) -> Option<f64> {
+        let holders = crate::discover::pids_listening_on(port);
+        if holders.is_empty() {
+            return None;
+        }
+        let matched: Vec<&Proc> = self
+            .rows
+            .iter()
+            .filter(|r| {
+                holders.contains(&r.pid)
+                    || r.parent.map(|par| holders.contains(&par)).unwrap_or(false)
+            })
+            .collect();
+        if matched.is_empty() {
+            return None;
+        }
+        let total: f64 = matched.iter().map(|r| r.rss_mb).sum();
+        Some((total * 10.0).round() / 10.0)
     }
 }
 
@@ -101,7 +158,15 @@ pub fn sample(services: &[Service], snapshot: Option<&Snapshot>) -> Vec<serde_js
                         let detail = if found { probes::clip(&cmd) } else { "not running".to_string() };
                         ((state.to_string(), detail, 0i64), rss)
                     } else {
-                        (probes::run(svc), 0.0)
+                        // A listening service: resolve the PID that holds the port in this same
+                        // wave and sum its RSS with its children's. Unresolvable stays 0.0 here and
+                        // the UI renders it "—", because 0 reads as "using no memory".
+                        let ram = crate::config::port_of(&svc.target)
+                            .parse::<u16>()
+                            .ok()
+                            .and_then(|p| snap.rss_for_port(p))
+                            .unwrap_or(0.0);
+                        (probes::run(svc), ram)
                     };
                     out.lock().unwrap().push((i, triple, ram));
                 }

@@ -17,6 +17,9 @@ pub struct Entry {
     pub verify_contains: String,
     pub process_match: String,
     pub notes: String,
+    /// Installed but normally not running. Still reported, still alerts on transitions, but kept
+    /// out of uptime arithmetic — a service that is off on purpose would otherwise read 0% for ever.
+    pub expected_off: bool,
 }
 
 impl Entry {
@@ -81,6 +84,17 @@ fn parse(source: &str, label: &str) -> Result<Vec<Entry>, ConfigError> {
         if (probe == "http" || probe == "tcp") && default_port == 0 {
             return Err(ConfigError(format!("{label}: {cid}: probe {probe} needs a default_port")));
         }
+        // An HTTP entry without a body signature can only be trusted by status code, and a status
+        // code is not an identity: macOS AirPlay answers 403 on port 5000, which a signature-less
+        // Frigate entry read as "Frigate is degraded". Refusing the entry is the fix.
+        let verify_contains = get("verify_contains").trim().to_string();
+        if probe == "http" && verify_contains.is_empty() {
+            return Err(ConfigError(format!(
+                "{label}: {cid}: an http entry needs verify_contains — without it any listener on \
+                 port {} would be mistaken for {cid}",
+                default_port
+            )));
+        }
         let name = {
             let n = get("name");
             if n.is_empty() { cid.clone() } else { n }
@@ -96,9 +110,10 @@ fn parse(source: &str, label: &str) -> Result<Vec<Entry>, ConfigError> {
             probe,
             default_port: default_port.max(0) as u16,
             verify_path: get("verify_path"),
-            verify_contains: get("verify_contains"),
+            verify_contains,
             process_match: get("process_match"),
             notes: get("notes"),
+            expected_off: r.get("expected_off").and_then(|v| v.as_bool()).unwrap_or(false),
         });
     }
     entries.sort_by(|a, b| a.group.cmp(&b.group).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
@@ -189,19 +204,58 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_shipped_catalog_loads_and_has_signatures() {
+    fn every_http_entry_carries_a_signature() {
+        // The invariant that makes discovery trustworthy. Before this was enforced, 16 of 50 entries
+        // shipped with an empty signature and port 5000 (macOS AirPlay) was reported as Frigate.
         let entries = load(None).expect("embedded catalog must parse");
-        assert!(entries.len() > 20, "catalog looks truncated: {}", entries.len());
-        let http_signed = entries.iter().filter(|e| e.has_signature()).count();
-        assert!(http_signed > 5, "almost no HTTP entry carries a signature");
+        let unsigned: Vec<&str> = entries
+            .iter()
+            .filter(|e| e.is_http() && !e.has_signature())
+            .map(|e| e.id.as_str())
+            .collect();
+        assert!(unsigned.is_empty(), "http entries without a signature: {unsigned:?}");
     }
 
     #[test]
-    fn catalog_covers_the_common_self_hosted_stack() {
-        let ids: Vec<String> = load(None).unwrap().into_iter().map(|e| e.id).collect();
-        for expected in ["nginx", "docker", "postgres", "grafana"] {
-            assert!(ids.contains(&expected.to_string()), "catalog cannot express {expected}");
+    fn an_unsigned_http_entry_is_refused_at_load() {
+        let bad = r#"
+[[catalog]]
+id = "frigate"
+name = "Frigate"
+group = "Cameras"
+probe = "http"
+default_port = 5000
+verify_path = "/api/version"
+verify_contains = ""
+"#;
+        let err = parse(bad, "<test>").unwrap_err().to_string();
+        assert!(err.contains("verify_contains"), "got: {err}");
+    }
+
+    #[test]
+    fn the_shipped_catalog_is_the_arena_not_a_speculation() {
+        // Deliberately small. A private script or a project only this machine runs does not belong
+        // here; neither does software nobody in the fleet has installed.
+        let entries = load(None).unwrap();
+        assert!(!entries.is_empty(), "catalog must not be empty");
+        assert!(entries.len() <= 40, "catalog drifted back into speculation: {}", entries.len());
+        let ids: Vec<&str> = entries.iter().map(|e| e.id.as_str()).collect();
+        for expected in ["9router", "syncthing", "v2raya", "ntfy", "vocechat", "searxng", "vaultwarden", "docker", "ssh"] {
+            assert!(ids.contains(&expected), "fleet service {expected} is missing from the catalog");
         }
+        // Absence is a feature: these were all speculative.
+        for gone in ["grafana", "prometheus", "postgres", "jellyfin", "frigate"] {
+            assert!(!ids.contains(&gone), "{gone} is not run anywhere and should not be catalogued");
+        }
+    }
+
+    #[test]
+    fn expected_off_survives_the_round_trip() {
+        let entries = load(None).unwrap();
+        let lm = by_id(&entries, "lmstudio").expect("lmstudio entry");
+        assert!(lm.expected_off, "lmstudio is off on purpose and must say so");
+        let syn = by_id(&entries, "syncthing").expect("syncthing entry");
+        assert!(!syn.expected_off, "syncthing runs continuously");
     }
 
     #[test]
