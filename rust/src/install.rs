@@ -293,9 +293,46 @@ pub fn uninstall(cfg: &config::Config) -> i32 {
     0
 }
 
-/// `observer-frog autostart`: report it, so the GUI has something honest to poll.
+/// Is autostart actually on?
+///
+/// Measured from the init system, not from the file. `enable`/`disable` do not remove the unit, so
+/// checking for its existence answered "installed" no matter what the operator had switched off —
+/// and the Settings page, which reads this, snapped its checkbox back to "on" after every refresh.
 pub fn is_installed(cfg: &config::Config) -> bool {
-    unit_path(&role_of(cfg)).map(|p| p.exists()).unwrap_or(false)
+    let role = role_of(cfg);
+    let Ok(unit) = unit_path(&role) else { return false };
+    if !unit.exists() {
+        return false;
+    }
+    if cfg!(target_os = "macos") {
+        let uid = std::process::Command::new("id")
+            .arg("-u")
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_string())
+            .unwrap_or_else(|| "501".into());
+        // `launchctl print-disabled` lists a label as disabled whether or not it is loaded, which is
+        // the same state `launchctl disable` writes. Absent from that list means enabled.
+        let out = std::process::Command::new("launchctl")
+            .arg("print-disabled")
+            .arg(format!("gui/{uid}"))
+            .output();
+        match out {
+            Ok(o) => {
+                let text = String::from_utf8_lossy(&o.stdout);
+                !text.contains(&format!("\"dev.observerfrog.{role}\" => disabled"))
+            }
+            Err(_) => true,
+        }
+    } else {
+        let name = unit.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();
+        std::process::Command::new("systemctl")
+            .args(["--user", "is-enabled", &name])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
 }
 
 /// Turn autostart on or off **without killing a running node**.
