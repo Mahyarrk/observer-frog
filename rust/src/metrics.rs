@@ -125,21 +125,42 @@ pub fn thermal() -> Value {
         }
         return json!({"thermal": Value::Null, "temp_c": Value::Null});
     }
-    // Linux: /sys/class/thermal is the portable no-root source.
+    // Linux: /sys/class/thermal, but not every zone is a thermometer. INT3400 is a control zone
+    // that reports a fixed 20C, and acpitz is a chassis estimate; trusting whichever zone is
+    // enumerated first reports a comfortable 20C while the CPU sits at 46. Prefer a zone whose
+    // driver names the silicon, and only then fall back.
+    const PREFERRED: [&str; 5] = ["x86_pkg_temp", "coretemp", "k10temp", "cpu_thermal", "soc_thermal"];
+
     if let Ok(entries) = std::fs::read_dir("/sys/class/thermal") {
+        let mut zones: Vec<(String, f64)> = Vec::new();
         for e in entries.flatten() {
-            let name = e.file_name().to_string_lossy().to_string();
-            if !name.starts_with("thermal_zone") {
+            let zonename = e.file_name().to_string_lossy().to_string();
+            if !zonename.starts_with("thermal_zone") {
                 continue;
             }
-            let temp_path = e.path().join("temp");
-            if let Ok(raw) = std::fs::read_to_string(&temp_path) {
-                if let Ok(milli) = raw.trim().parse::<f64>() {
-                    if milli > 0.0 {
-                        return json!({"thermal": Value::Null, "temp_c": round1(milli / 1000.0)});
-                    }
-                }
+            let kind = std::fs::read_to_string(e.path().join("type"))
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            let Ok(raw) = std::fs::read_to_string(e.path().join("temp")) else { continue };
+            let Ok(milli) = raw.trim().parse::<f64>() else { continue };
+            if milli > 0.0 {
+                zones.push((kind, milli / 1000.0));
             }
+        }
+
+        // A named silicon sensor first; a chassis estimate only if nothing better exists.
+        for want in PREFERRED {
+            if let Some((_, c)) = zones.iter().find(|(k, _)| k == want) {
+                return json!({"thermal": Value::Null, "temp_c": round1(*c)});
+            }
+        }
+        let fallback = zones
+            .iter()
+            .find(|(k, _)| !k.contains("INT3400") && k != "acpitz")
+            .or_else(|| zones.iter().find(|(k, _)| k == "acpitz"));
+        if let Some((_, c)) = fallback {
+            return json!({"thermal": Value::Null, "temp_c": round1(*c)});
         }
     }
     json!({"thermal": Value::Null, "temp_c": Value::Null})

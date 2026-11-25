@@ -94,7 +94,27 @@ pub fn post(opts: &TailOptions, body: &Value) -> Result<Value, String> {
 }
 
 /// Run the tail loop until stopped.
-pub fn run(cfg: Config, opts: TailOptions, halt: Arc<AtomicBool>) -> i32 {
+pub fn run(mut cfg: Config, opts: TailOptions, halt: Arc<AtomicBool>) -> i32 {
+    // Ask the machine what it is running rather than trusting a hand-written list. Discovery
+    // only ever adds services the catalog can verify, so a stale entry cannot appear here.
+    if cfg.discover && cfg.services.is_empty() {
+        match crate::catalog::load(None) {
+            Ok(entries) => {
+                let found = crate::discover::discover(&entries, "127.0.0.1");
+                if found.is_empty() {
+                    println!("  discovered nothing; no catalog service is listening here");
+                } else {
+                    println!("  discovered {} service(s) on this machine:", found.len());
+                    for s in &found {
+                        println!("    {:<16} {}", s.id, s.target);
+                    }
+                }
+                cfg.services = found;
+            }
+            Err(e) => eprintln!("  cannot load the catalog, no discovery: {e}"),
+        }
+    }
+
     println!("observer-frog tail");
     println!("  node {} ({})", cfg.node_id, crate::config::hostname());
     println!("  {} service(s), reporting every {}s", cfg.services.len(), cfg.poll_interval);
@@ -168,6 +188,7 @@ mod tests {
             port: 8770,
             poll_interval: 30,
             db_path: std::path::PathBuf::from("/tmp/of-tail-test.db"),
+            discover: false,
             report_port: None,
             services,
             sinks: vec![],

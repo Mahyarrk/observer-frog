@@ -49,6 +49,7 @@ fn run(args: &[String]) -> i32 {
     match cmd.as_deref() {
         Some("config") => cmd_config(&cfg),
         Some("catalog") => cmd_catalog(&entries, args.get(positional_after(args, "catalog")).map(|s| s.as_str())),
+        Some("discover") => cmd_discover(&entries),
         Some("add") => cmd_add(&cfg, &entries, args),
         Some("metrics") => cmd_metrics(&cfg),
         Some("enrol") => cmd_enrol(&cfg, args),
@@ -77,6 +78,7 @@ commands:
   status     show resolved configuration and database state
   config     print resolved settings
   catalog    list services that ship with a ready-made definition
+  discover   find what this machine is running and print ready-to-use config blocks
   add        print the config block for a catalog service
   metrics    print this machine's status line (no server)
   enrol      register a node and its token (token from env, never the config)
@@ -116,6 +118,39 @@ fn cmd_config(cfg: &config::Config) -> i32 {
     println!("{:<14} {}", "port", cfg.port);
     println!("{:<14} {}", "poll_interval", cfg.poll_interval);
     println!("{:<14} {}", "db_path", cfg.db_path.display());
+    0
+}
+
+/// Print what is running here, as config blocks the operator can paste into a tail.
+fn cmd_discover(entries: &[catalog::Entry]) -> i32 {
+    let listeners = observer_frog::discover::listening();
+    println!("{} listening port(s) on this machine", listeners.len());
+
+    let found = observer_frog::discover::discover(entries, "127.0.0.1");
+    if found.is_empty() {
+        println!("\nno catalog service recognised. Nothing here matches a shipped definition.");
+    } else {
+        println!("\nrecognised {} service(s):", found.len());
+        for s in &found {
+            println!("  {:<16} {:<8} {}", s.id, s.probe, s.target);
+        }
+        println!("\nAdd to a tail config with `discover = true`, or paste the blocks below:");
+        for s in &found {
+            println!(
+                "\n[[service]]\nid = \"{}\"\nprobe = \"{}\"\ntarget = \"{}\"\nname = \"{}\"\ngroup = \"{}\"",
+                s.id, s.probe, s.target, s.name, s.group
+            );
+        }
+    }
+
+    let left = observer_frog::discover::unmatched(entries, &listeners);
+    if !left.is_empty() {
+        println!("\nlistening but unrecognised (add these by hand if you care about them):");
+        for l in left.iter().take(12) {
+            let who = if l.process.is_empty() { "unknown" } else { l.process.as_str() };
+            println!("  port {:<6} {who}", l.port);
+        }
+    }
     0
 }
 

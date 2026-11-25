@@ -59,6 +59,9 @@ pub struct Config {
     pub port: u16,
     pub poll_interval: u64,
     pub db_path: PathBuf,
+    /// When a tail has no `[[service]]` blocks, discover them from what the machine is running.
+    /// A head never discovers: it probes what the operator chose.
+    pub discover: bool,
     /// A second plain-HTTP listener for tail reports. `None` disables it.
     ///
     /// Tails live on a LAN and should not manage certificates; a phone installing a PWA needs
@@ -235,6 +238,18 @@ pub fn load(path: Option<&Path>) -> Result<Config, ConfigError> {
     for t in tables(raw.get("service"), "service", &where_)? {
         services.push(as_service(t, &where_)?);
     }
+
+    // A tail with no explicit list asks the machine what it is running. A head does not: it
+    // probes what the operator chose, and discovering on a head would silently add services the
+    // operator never asked for.
+    let serve_enabled = serve_cfg
+        .and_then(|t| t.get("enabled"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(!where_.is_empty());
+    let discover = raw
+        .get("discover")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(!serve_enabled && services.is_empty());
     let mut seen = HashSet::new();
     let mut dupes: Vec<String> = Vec::new();
     for s in &services {
@@ -292,6 +307,7 @@ pub fn load(path: Option<&Path>) -> Result<Config, ConfigError> {
         },
         poll_interval,
         db_path,
+        discover,
         report_port,
         services,
         sinks,
