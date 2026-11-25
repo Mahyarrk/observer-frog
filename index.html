@@ -2065,7 +2065,7 @@
       const API_BASE = (window.location.pathname.replace(/\/$/, '') || '');
       // Bump on every shell change. Declared before first use: a `const` referenced above its
       // declaration throws a TDZ error and takes the whole script down (it did).
-      const BUILD = 'of-13';
+      const BUILD = 'of-14';
       // Show the address actually in use, not a baked-in host.
       (function () {
         const el = document.getElementById('brand-url');
@@ -2872,10 +2872,13 @@
         set('set-role', d.role);
         // Red sentence, not a crash: a node with no head paired simply stops sending, and this
         // explains why. Ticking "serve" makes it moot, because a head has nothing to send to.
-        const warn = document.getElementById('set-head-warn');
-        if (warn) warn.hidden = d.serve || d.head_paired;
-        if (!d.token_ok && d.head_paired && !d.serve) {
-          if (warn) { warn.hidden = false; warn.textContent = 'No token for that head: reporting will be refused. Set token_file in the config.'; }
+        const headWarn = document.getElementById('set-head-warn');
+        if (headWarn) {
+          const noToken = !d.token_ok && d.head_paired && !d.serve;
+          headWarn.hidden = !noToken && (d.serve || d.head_paired);
+          if (noToken) {
+            headWarn.textContent = 'No token for that head: reporting will be refused. Set token_file in the config.';
+          }
         }
         set('set-path', d.config_path);
         set('set-db', d.db_path);
