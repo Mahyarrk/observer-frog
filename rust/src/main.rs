@@ -233,7 +233,15 @@ fn cmd_enrol(cfg: &config::Config, args: &[String]) -> i32 {
             0
         }
         Err(e) => {
-            eprintln!("cannot enrol {node}: {e}");
+            let text = e.to_string();
+            if text.contains("UNIQUE") && text.contains("token_sha256") {
+                eprintln!(
+                    "cannot enrol {node}: that token is already assigned to another node. \
+                     Each machine needs its own token so revoking one does not revoke the rest."
+                );
+            } else {
+                eprintln!("cannot enrol {node}: {e}");
+            }
             1
         }
     }

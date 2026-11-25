@@ -8,7 +8,7 @@ use rusqlite::{Connection, OpenFlags};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub const SCHEMA_VERSION: i64 = 4;
+pub const SCHEMA_VERSION: i64 = 5;
 pub const RAW_RETENTION_S: i64 = 86_400; // 24 h of per-check rows
 pub const ROLLUP_RETENTION_S: i64 = 2_592_000; // 30 days of hourly counters
 
@@ -121,6 +121,13 @@ pub fn init(path: &Path) -> rusqlite::Result<i64> {
                 "CREATE UNIQUE INDEX IF NOT EXISTS ux_checks ON service_checks (node_id, service_id, observed_at)",
                 [],
             )?;
+            // One token, one machine. Empty means "not enrolled yet" and is exempt, so several
+            // nodes can wait for a token without colliding.
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ux_nodes_token ON nodes (token_sha256) \
+                 WHERE token_sha256 <> ''",
+                [],
+            )?;
             Ok(SCHEMA_VERSION)
         }
         Some(v) if v < SCHEMA_VERSION => {
@@ -198,12 +205,30 @@ pub fn init(path: &Path) -> rusqlite::Result<i64> {
                 conn.execute("UPDATE nodes SET reported_name = name WHERE reported_name = ''", [])?;
                 version = 4;
             }
+            if version < 5 {
+                // v5 makes a token unique to one machine. The index itself is created below, after
+                // this block, so the migration only has to clear any pre-existing duplicate. An
+                // operator who reused a token has to re-enrol one node; there is no safe guess.
+                conn.execute(
+                    "UPDATE nodes SET token_sha256 = '' WHERE token_sha256 <> '' AND rowid NOT IN (\
+                     SELECT MIN(rowid) FROM nodes WHERE token_sha256 <> '' GROUP BY token_sha256)",
+                    [],
+                )?;
+                version = 5;
+            }
             conn.execute(
                 "UPDATE schema_version SET version = ?, applied_ts = ?",
                 (version, now()),
             )?;
             conn.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS ux_checks ON service_checks (node_id, service_id, observed_at)",
+                [],
+            )?;
+            // One token, one machine. Empty means "not enrolled yet" and is exempt, so several
+            // nodes can wait for a token without colliding.
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ux_nodes_token ON nodes (token_sha256) \
+                 WHERE token_sha256 <> ''",
                 [],
             )?;
             Ok(version)
@@ -274,6 +299,38 @@ mod tests {
             .query_row("SELECT 1 FROM sqlite_master WHERE name='intentional'", [], |_| Ok(true))
             .unwrap_or(false);
         assert!(!still, "intentional table survived the migration");
+    }
+
+    #[test]
+    fn two_nodes_cannot_share_a_token() {
+        // One token, one machine: revoking a laptop must revoke exactly one thing.
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("tok.db");
+        init(&db).unwrap();
+        let conn = connect(&db).unwrap();
+        conn.execute(
+            "INSERT INTO nodes (node_id, token_sha256) VALUES ('a', 'deadbeef')",
+            [],
+        )
+        .unwrap();
+        let clash = conn.execute(
+            "INSERT INTO nodes (node_id, token_sha256) VALUES ('b', 'deadbeef')",
+            [],
+        );
+        assert!(clash.is_err(), "the same token must not serve two nodes");
+    }
+
+    #[test]
+    fn nodes_without_a_token_yet_do_not_collide() {
+        // An enrolled-later node has an empty token; several must be able to wait.
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("empty.db");
+        init(&db).unwrap();
+        let conn = connect(&db).unwrap();
+        conn.execute("INSERT INTO nodes (node_id) VALUES ('a')", []).unwrap();
+        conn.execute("INSERT INTO nodes (node_id) VALUES ('b')", []).unwrap();
+        let n: i64 = conn.query_row("SELECT COUNT(*) FROM nodes", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 2);
     }
 
     #[test]
