@@ -102,12 +102,19 @@ impl Snapshot {
         if needle.is_empty() {
             return None;
         }
-        let matched: Vec<&Proc> = self.rows.iter().filter(|r| r.cmd_lower.contains(&needle)).collect();
-        if std::env::var("OF_DEBUG_RAM").is_ok() {
-            for m in &matched {
-                eprintln!("ram-debug: needle={needle:?} pid={} rss={} cmd={}", m.pid, m.rss_mb, m.cmd);
-            }
-        }
+        // Match the *exact* executable name, not a substring of the whole command line.
+        // A substring match catches every shell wrapper, editor and helper that merely mentions the
+        // service -- that is how a 59 MB VoceChat was reported as 888 MB, since the sum swept up
+        // unrelated processes whose arguments happened to contain the name.
+        let matched: Vec<&Proc> = self
+            .rows
+            .iter()
+            .filter(|r| {
+                let exe = r.cmd.split_whitespace().next().unwrap_or("");
+                let name = exe.rsplit('/').next().unwrap_or(exe).to_lowercase();
+                name == needle || name.trim_end_matches("-server") == needle
+            })
+            .collect();
         if matched.is_empty() {
             return None;
         }
@@ -183,17 +190,16 @@ pub fn sample(services: &[Service], snapshot: Option<&Snapshot>) -> Vec<serde_js
                         // A listening service: resolve the PID that holds the port in this same
                         // wave and sum its RSS with its children's. Unresolvable stays 0.0 here and
                         // the UI renders it "—", because 0 reads as "using no memory".
-                        // Resolve memory two ways, cheapest first. The port→PID route is exact but
-                        // needs elevation on Linux (`ss` hides pid= from unprivileged callers), so
-                        // fall back to matching the service's own name in the process table. Both
-                        // are honest: a miss yields None and the card shows "—", never "0 MB".
-                        let by_port = crate::config::port_of(&svc.target)
+                        // Port → PID → RSS is the only attribution that is *exact*: it names the
+                        // process that actually holds the socket. A name match is not a substitute —
+                        // "node" matches every Node process on the box and reported a 67 MB router
+                        // as 229 MB. So an unresolvable port stays None and the card shows "—".
+                        // macOS reports the PID in `lsof`; Linux only does so under elevation, where
+                        // this deliberately returns "—" rather than a plausible-looking wrong number.
+                        let ram = crate::config::port_of(&svc.target)
                             .parse::<u16>()
                             .ok()
-                            .and_then(|p| snap.rss_for_port(p));
-                        let ram = by_port
-                            .or_else(|| snap.rss_for(&svc.id))
-                            .or_else(|| snap.rss_for(svc.name.as_str()))
+                            .and_then(|p| snap.rss_for_port(p))
                             .unwrap_or(0.0);
                         (probes::run(svc), ram)
                     };
