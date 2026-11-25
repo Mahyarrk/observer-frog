@@ -8,9 +8,10 @@ wrote this.
 It watches the services you list, records when they go down and come back, keeps 30 days of uptime,
 and serves a PWA you can install on your home screen.
 
-It runs on more than one machine: one install is the head that serves the dashboard, and every
-other machine is a tail that reports to it. It ships as one static binary, with no runtime and no
-temp directory extracted at launch.
+It runs on more than one machine. One of them acts as the head and shows everything; the others
+report to it. Which is which is a setting, not an install profile: every copy runs the same code,
+keeps its own dashboard, and can be switched between the two roles without a restart. It ships as
+one static binary, with no runtime and no temp directory extracted at launch.
 
 ## Quick start
 
@@ -30,22 +31,48 @@ With a certificate, the same binary speaks HTTPS itself:
 ./target/release/observer-frog --tls-cert cert.pem --tls-key key.pem --bind 0.0.0.0
 ```
 
+This is 0.4.0. What is there works and is tested on two machines, one macOS and one Debian; what is
+not there is in the list below.
+
 A deployment looks like a staging area and a promotion step: build a candidate, run it beside the
 one in use against the same configuration, compare, then promote.
 
 ## Two machines
 
-A tail probes its own services and posts the result. It runs no server and needs no certificate.
+Every copy always does both jobs: it probes this machine and keeps a dashboard, whether or not
+anyone else is looking at it. Two settings decide what leaves the machine.
 
-```bash
-# on the head: register the tail and its token (the token comes from the environment)
-export TAIL_TOKEN=$(openssl rand -hex 24)
-observer-frog enrol laptop --token-env TAIL_TOKEN --interval 30
+| Setting | Default | What it does |
+|---------|---------|--------------|
+| `[serve] enabled` | `true` | Aggregates other machines and watches for their silence |
+| `report_to` | empty | Where this machine sends its own results |
 
-# on the tail: report every 30s
-export TAIL_TOKEN=...            # the same value
-observer-frog report --to http://head:8771 --token-env TAIL_TOKEN
+So a machine with `enabled = true` and nothing in `report_to` is a head: it collects. A machine
+with `enabled = false` and a `report_to` is a tail: it sends. A machine with neither is simply
+idle — it still shows its own numbers, and says in Settings that no head is paired. Nothing
+crashes, and nothing restarts.
+
+Both switches are read while the process is running, so changing one takes effect within a few
+seconds. That was a deliberate change: an earlier build rebuilt its service definition per role,
+which meant flipping a role needed a shell, and getting it wrong left a process exiting in a loop.
+
+### Pairing
+
+A tail should not be handed a password and told to trust whoever answers. Discovery already finds
+heads on the LAN; pairing is what turns one into a relationship.
+
 ```
+tail:  finds a head, generates a token, asks to join
+head:  shows the request in Settings with a tick and a cross
+you:   click one
+```
+
+Until you click, that request is not a credential: the machine cannot report, and its node does not
+appear in the roster. Approving writes the token's digest — the token itself never travels from
+head to tail. Rejecting leaves the machine unable to report. Settings also lists the machines
+already paired, and removing one revokes its token for good: it has to ask again.
+
+The digest, not the token, is stored, so a stolen database does not hand anyone a working credential.
 
 The head stamps arrival time, so a tail with a wrong clock cannot corrupt the record. Reports are
 idempotent: a retry over a flaky link changes nothing. A tail that stops reporting has its
@@ -65,6 +92,32 @@ certificates. Both listeners can run at once over the same state:
 port = 8770           # TLS here, for browsers
 report_port = 8771    # plain HTTP here, for tail reports
 ```
+
+## Running it without thinking about it
+
+`install` writes the service definition and starts it. No plist, no unit file, no root:
+
+```bash
+observer-frog install     # LaunchAgent on macOS, user unit on Linux
+observer-frog uninstall   # and it is gone
+```
+
+The same command is how an upgrade lands. It copies the binary somewhere durable, points the
+service at that copy, and restarts it — so `install` after a rebuild is the whole upgrade
+procedure. A unit that pointed at `target/release/` would break the first time anyone ran
+`cargo clean`.
+
+Autostart can also be switched from Settings, which matters on a machine you reach from a phone.
+Turning it off stops it starting at boot without stopping what is running now: those are different
+questions, and the switch only answers the first.
+
+On Linux the user unit needs lingering to start before anyone logs in:
+
+```bash
+loginctl enable-linger $USER
+```
+
+The installer says so rather than pretending the unit is enough on its own.
 
 ## Adding a service
 
@@ -133,7 +186,9 @@ No Docker. A container cannot see host processes, its own cgroup is not the host
 published ports are not the real listeners. Run it natively; mine sits around 8 MB resident.
 
 No certificate authority. The binary terminates TLS itself when you give it `--tls-cert` and
-`--tls-key`, but it will not issue or renew anything, so the certificate is yours to obtain. Bind
+`--tls-key`, but it will not issue or renew anything, so the certificate is yours to obtain. Those
+flags only work from a shell: the installed service does not read them yet, so a service-managed
+head currently speaks plain HTTP on its dashboard port. Config-file TLS is the next thing to land. Bind
 loopback by default and put Caddy, nginx, WireGuard or Tailscale in front if you would rather not
 manage certificates at all.
 
@@ -144,6 +199,9 @@ accepts a JSON POST.
 
 No store-and-forward. A tail that cannot reach the head loses those samples rather than queueing
 them; there is no buffer to drain later.
+
+No second service definition per role. One unit per machine, named for the machine rather than the
+job, because a name that changes with a checkbox is a name a restart cannot find.
 
 ## Honest limits
 
@@ -161,6 +219,9 @@ surprise you. The catalog is a curated list, not a discovery engine.
 | `/api/history?days=N` | incidents, uptime and KPIs |
 | `/api/poll` | run one probe wave now; a second concurrent caller gets 409 |
 | `/api/ignore` | POST `{id, ignored}` |
+| `/api/pair` | GET pending requests and paired machines; POST a request (a tail calls this) |
+| `/api/pair/decide` | POST `{id, approve}` — the tick and the cross |
+| `/api/pair/remove` | POST `{node_id}` — revoke one machine |
 | `/api/health` | liveness |
 
 ## Checking a machine without starting the server
@@ -173,7 +234,7 @@ surprise you. The catalog is a curated list, not a discovery engine.
 ## Tests
 
 ```bash
-cd rust && cargo test        # 36 tests
+cd rust && cargo test        # 106 tests
 ```
 
 Every behavioural rule in `docs/DESIGN.md` has a test named after it, and the tests exist because
@@ -185,40 +246,25 @@ reading healthy for hours.
 
 ## How this was built, and by whom
 
-The code was written by AI agents running in Hermes Agent, under my direction. I did not type it,
-and I am not going to imply otherwise.
-
-It began in Python. That original is frozen on the `python-v0.1` branch and no longer part of this
-tree. Rust replaced it for distribution: 2.6 MB, against 48 MB for a single-file Python executable
-that antivirus software flags. The port was verified rather than asserted, and `rust/parity.py` still
-does that comparison against the frozen branch: run both builds on the same configuration and it
-checks every endpoint, every service state and every response shape. They serve byte-identical web
-assets. Memory is 8 MB against 40.
+The code was written by AI agents running Hermes Agent, under my direction. I did not type it, and I
+am not going to imply otherwise.
 
 What I did was the part that decides whether the result is any good. I set the constraints: native
-install only, no container, one binary with independent `serve` and `report_to` flags instead of a
-mode switch, a catalog of known services instead of a free-form probe builder, one flag for "I know
-about this" rather than two that mean nearly the same thing. I chose what to leave out, which was
-most of it. I read the diffs, ran it against my own machines, and reported what broke: a probe that
-matched its own command line and reported every service healthy, a runtime function that repainted
-the old icon over the new one, counters that split on the wrong flag, a `const` used before its
-declaration that blanked the whole page.
+install only, no container, one binary with independent `serve` and `report_to` settings instead of
+a mode switch, a catalog of known services instead of a free-form probe builder, one flag for "I
+know about this" rather than two that mean nearly the same thing. I chose what to leave out, which
+was most of it. I read the diffs, ran it against my own machines, and reported what broke.
 
-The tests were written by the AI as well. That is worth knowing when you weigh them: they encode the
-same understanding that produced the code, so they catch regressions in behaviour we already thought
-about, not mistakes we never considered. The bugs above were found by using the thing, not by the
-suite.
+It began in Python. That original is frozen on the `python-v0.1` branch and is no longer part of
+this tree. Rust replaced it for distribution: 2.6 MB, against 48 MB for a single-file Python
+executable that antivirus software flags. `rust/parity.py` still verifies the port against the
+frozen branch: both builds on the same configuration, every endpoint, every service state, every
+response shape. They serve byte-identical web assets. Memory is 8 MB against 40.
 
-The Rust port leans the other way, which is part of why I made it canonical. The compiler rejects
-whole classes of mistake that Python accepts silently, and the two most expensive bugs in the port
-were both caught by running it rather than compiling it: a process scan that returned an empty command
-line for every process unless asked for it explicitly, which made every process probe report "not
-running", and a TLS library that panics at first use unless a crypto provider is registered. Loud
-failures at the moment of use are worth more than a clean compile.
-
-What that means for you: read the code before you trust it with anything that matters, expect rough
-edges, and treat support as best-effort. The licence says the software comes with no warranty, and in
-this case that is not boilerplate.
+The tests were written by the AI as well, which is worth knowing when you weigh them: they encode
+the same understanding that produced the code. Read the code before you trust it with anything that
+matters, expect rough edges, and treat support as best-effort. The licence says the software comes
+with no warranty, and in this case that is not boilerplate.
 
 ## Licence
 
