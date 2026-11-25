@@ -9,10 +9,40 @@ use crate::probes;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
-use sysinfo::{ProcessesToUpdate, System};
+
 
 pub const MAX_WORKERS: usize = 12;
 pub const WAVE_BUDGET_FRACTION: f64 = 0.8;
+
+/// Parse `ps -Ao pid=,ppid=,rss=,args=`.
+///
+/// Only `args` is read, never `comm`: `ps` truncates `comm` to a fixed width and pads it, so
+/// "next-server (v16.4.2)" arrives as "next-server (v16" and cannot be reconstructed. The first
+/// token of `args` is the executable path, which is both unambiguous and what identifies a service.
+fn parse_ps(text: &str, excluded: &[u32]) -> Vec<Proc> {
+    let mut rows = Vec::new();
+    for line in text.lines() {
+        let mut it = line.split_whitespace();
+        let (Some(pid), Some(ppid), Some(kb)) = (it.next(), it.next(), it.next()) else { continue };
+        let (Ok(pid), Ok(ppid), Ok(kb)) = (pid.parse::<u32>(), ppid.parse::<u32>(), kb.parse::<f64>())
+        else { continue };
+        if excluded.contains(&pid) {
+            continue;
+        }
+        let cmd: String = it.collect::<Vec<_>>().join(" ");
+        if cmd.is_empty() {
+            continue;
+        }
+        rows.push(Proc {
+            pid,
+            parent: if ppid == 0 { None } else { Some(ppid) },
+            cmd_lower: cmd.to_lowercase(),
+            cmd,
+            rss_mb: ((kb / 1024.0) * 10.0).round() / 10.0,
+        });
+    }
+    rows
+}
 
 /// One process in the wave snapshot.
 pub struct Proc {
@@ -33,49 +63,23 @@ pub struct Snapshot {
 impl Snapshot {
     pub fn new() -> Self {
         let excluded = probes::self_exclusions();
-        let mut sys = System::new();
-        // I12: one scan feeds every process lookup in the wave, and `cmd` must be requested.
-        sys.refresh_processes_specifics(
-            ProcessesToUpdate::All,
-            true,
-            sysinfo::ProcessRefreshKind::new()
-                .with_cmd(sysinfo::UpdateKind::Always)
-                .with_memory(),
-        );
-        let mut rows = Vec::with_capacity(sys.processes().len());
-        for (pid, p) in sys.processes() {
-            if excluded.contains(&pid.as_u32()) {
-                continue;
+        // `ps` rather than sysinfo, deliberately: sysinfo cannot read the memory or command line of
+        // a process owned by another user — and never of root — so on a real machine (vocechat runs
+        // as `vocechat`, xray as `root`) most services came back unreadable. `ps` reports them all
+        // without privileges on macOS and Linux. One fork per wave, the same cost as the scan it
+        // replaces, and no service needs root to be measured.
+        let rows = match std::process::Command::new("ps")
+            .args(["-Ao", "pid=,ppid=,rss=,args="])
+            .output()
+        {
+            Ok(out) => parse_ps(&String::from_utf8_lossy(&out.stdout), &excluded),
+            Err(e) => {
+                eprintln!("cannot read the process table: {e}");
+                Vec::new()
             }
-            let cmd = p.cmd().iter().map(|c| c.to_string_lossy()).collect::<Vec<_>>().join(" ");
-            let cmd = if cmd.is_empty() { p.name().to_string_lossy().to_string() } else { cmd };
-            let rss = p.memory() as f64 / (1024.0 * 1024.0);
-            rows.push(Proc {
-                pid: pid.as_u32(),
-                parent: p.parent().map(|q| q.as_u32()),
-                cmd_lower: cmd.to_lowercase(),
-                cmd,
-                rss_mb: (rss * 10.0).round() / 10.0,
-            });
-        }
-        // sysinfo cannot read the memory of another user's process without elevation, so a service
-        // running as root (wireguard-go, nginx) would report "—" on a machine that plainly has the
-        // number. One `ps` for the whole wave fills those in: `ps` may read RSS here, and paying for
-        // it only when something is unreadable keeps the normal case at one scan.
-        if rows.iter().any(|r| r.rss_mb <= 0.0) {
-            if let Ok(out) = std::process::Command::new("ps").args(["-Ao", "pid=,rss="]).output() {
-                let table = String::from_utf8_lossy(&out.stdout);
-                for line in table.lines() {
-                    let mut it = line.split_whitespace();
-                    let (Some(p), Some(kb)) = (it.next(), it.next()) else { continue };
-                    let (Ok(pid), Ok(kb)) = (p.parse::<u32>(), kb.parse::<f64>()) else { continue };
-                    if let Some(row) = rows.iter_mut().find(|r| r.pid == pid && r.rss_mb <= 0.0) {
-                        row.rss_mb = ((kb / 1024.0) * 10.0).round() / 10.0;
-                    }
-                }
-            }
-        }
-        Self { rows, ok: true, excluded }
+        };
+        let ok = !rows.is_empty();
+        Self { rows, ok, excluded }
     }
 
     /// Return (found, cmdline, rss_mb) for the first process whose cmdline contains `needle`.
@@ -296,5 +300,70 @@ impl Poller {
 impl Default for Poller {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod ps_parse_tests {
+    use super::*;
+
+    #[test]
+    fn the_process_table_parses_without_privileges() {
+        // Real shape, including a command line with spaces and a root-owned process.
+        let text = "    1     0  28496 /sbin/launchd\n 742   1  60628 /usr/local/bin/vocechat-server /etc/vocechat/config.toml\n 1532  1145 259232 node /opt/9router/server.js\n";
+        let rows = parse_ps(text, &[]);
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[1].pid, 742);
+        assert_eq!(rows[1].parent, Some(1));
+        assert_eq!(rows[1].rss_mb, 59.2);
+        // A service is identified by the executable, not by a substring of its arguments.
+        assert_eq!(rows[1].cmd.split_whitespace().next(), Some("/usr/local/bin/vocechat-server"));
+    }
+
+    #[test]
+    fn an_own_process_is_excluded() {
+        let text = " 742 1 60628 /usr/local/bin/vocechat-server\n";
+        assert!(parse_ps(text, &[742]).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod ram_tests {
+    use super::*;
+
+    fn proc_(pid: u32, cmd: &str, rss: f64) -> Proc {
+        Proc { pid, parent: None, cmd_lower: cmd.to_lowercase(), cmd: cmd.to_string(), rss_mb: rss }
+    }
+
+    fn snap(rows: Vec<Proc>) -> Snapshot {
+        Snapshot { rows, ok: true, excluded: vec![] }
+    }
+
+    #[test]
+    fn an_unambiguous_name_resolves_to_its_own_memory() {
+        let s = snap(vec![proc_(742, "/usr/local/bin/vocechat-server /etc/vocechat/config.toml", 59.2)]);
+        assert_eq!(s.rss_for_unique("vocechat"), Some(59.2));
+    }
+
+    #[test]
+    fn an_ambiguous_name_is_refused_rather_than_summed() {
+        // Two Node processes: neither is "the" service, and summing them invented 229 MB for a
+        // 67 MB router. Refusing is the correct answer; the card shows a dash.
+        let s = snap(vec![
+            proc_(1, "node /opt/9router/server.js", 100.0),
+            proc_(2, "node /opt/other/index.js", 50.0),
+        ]);
+        assert_eq!(s.rss_for_unique("9router"), None);
+    }
+
+    #[test]
+    fn a_wrapper_that_merely_mentions_the_service_is_not_it() {
+        // The 59 MB -> 888 MB bug: a substring match swept up any process whose arguments contained
+        // the name. Only the executable identifies a service.
+        let s = snap(vec![
+            proc_(742, "/usr/local/bin/vocechat-server /etc/vocechat/config.toml", 59.2),
+            proc_(900, "/bin/sh -c tail -f /var/log/vocechat.log", 800.0),
+        ]);
+        assert_eq!(s.rss_for_unique("vocechat"), Some(59.2), "the wrapper must not be summed");
     }
 }
