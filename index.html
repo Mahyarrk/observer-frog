@@ -451,6 +451,19 @@
     .settings-btn:hover { background: var(--bg-card-hover); }
     .settings-btn:disabled { opacity: .5; cursor: default; }
     .settings-heads { display: flex; flex-direction: column; gap: 8px; }
+    .settings-add { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .settings-select, .settings-add input {
+      font-family: var(--font-mono); font-size: 12px; padding: 7px 9px;
+      background: var(--bg-subtle); color: inherit;
+      border: 1px solid var(--border-subtle); border-radius: 8px;
+    }
+    .settings-add input { width: 130px; }
+    .settings-remove {
+      font: inherit; font-size: 11px; padding: 5px 9px; border-radius: 7px; cursor: pointer;
+      background: transparent; color: var(--down-color);
+      border: 1px solid var(--down-border);
+    }
+    .settings-remove:hover { background: var(--down-bg); }
     .settings-head {
       display: flex; justify-content: space-between; align-items: center; gap: 10px;
       padding: 10px 12px; border-radius: 9px;
@@ -1831,6 +1844,21 @@
         </div>
 
         <div class="settings-card">
+          <h2 class="settings-title">Services</h2>
+          <p class="settings-hint">
+            What this node watches. A catalog service can be added on a custom port; anything else
+            can be pasted as a config block.
+          </p>
+          <div id="set-services" class="settings-heads"></div>
+          <div class="settings-add">
+            <select id="set-catalog" class="settings-select"></select>
+            <input type="number" id="set-catalog-port" placeholder="port (optional)" min="1" max="65535" />
+            <button class="settings-btn" id="set-add-service" type="button">Add</button>
+          </div>
+          <p class="settings-note" id="set-services-note"></p>
+        </div>
+
+        <div class="settings-card">
           <h2 class="settings-title">Find a head on this network</h2>
           <p class="settings-hint">
             Any head on the same LAN answers a broadcast. Pick one to pair with it.
@@ -1945,7 +1973,7 @@
       const API_BASE = (window.location.pathname.replace(/\/$/, '') || '');
       // Bump on every shell change. Declared before first use: a `const` referenced above its
       // declaration throws a TDZ error and takes the whole script down (it did).
-      const BUILD = 'of-8';
+      const BUILD = 'of-9';
       // Show the address actually in use, not a baked-in host.
       (function () {
         const el = document.getElementById('brand-url');
@@ -2744,6 +2772,78 @@
         }
       }
 
+      async function loadServices() {
+        const box = document.getElementById('set-services');
+        if (!box) return;
+        let d;
+        try { d = await (await fetch('api/services', { cache: 'no-store' })).json(); } catch (_) { return; }
+        if (!d || !d.ok) return;
+        box.textContent = '';
+        if (!d.count) {
+          const empty = document.createElement('span');
+          empty.className = 'settings-hint';
+          empty.textContent = 'No services yet — this node reports vitals only.';
+          box.appendChild(empty);
+          return;
+        }
+        for (const s of d.services) {
+          const row = document.createElement('div');
+          row.className = 'settings-head';
+          const meta = document.createElement('div');
+          meta.className = 'settings-head-meta';
+          const nm = document.createElement('span');
+          nm.className = 'settings-head-name';
+          nm.textContent = s.name || s.id;
+          const det = document.createElement('span');
+          det.className = 'settings-head-url';
+          det.textContent = s.probe + '  ' + s.target + (s.ports ? '  [' + s.ports + ']' : '');
+          meta.appendChild(nm); meta.appendChild(det);
+          const rm = document.createElement('button');
+          rm.className = 'settings-remove';
+          rm.type = 'button';
+          rm.textContent = 'Remove';
+          rm.addEventListener('click', async () => {
+            const note = document.getElementById('set-services-note');
+            try {
+              const r = await fetch('api/services/remove', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id: s.id }),
+              });
+              const res = await r.json();
+              if (note) note.textContent = res.ok ? ('removed ' + s.id) : (res.error || 'remove failed');
+              loadServices();
+            } catch (e) { if (note) note.textContent = 'remove failed: ' + e; }
+          });
+          row.appendChild(meta); row.appendChild(rm);
+          box.appendChild(row);
+        }
+      }
+
+      async function loadCatalog() {
+        const sel = document.getElementById('set-catalog');
+        if (!sel || sel.options.length) return;
+        try {
+          // The catalog ships with the binary; list it so a service can be added by name.
+          const r = await fetch('api/services', { cache: 'no-store' });
+          const d = await r.json();
+          const known = new Set(d.ids || []);
+          const cat = await (await fetch('api/catalog', { cache: 'no-store' })).json();
+          for (const e of (cat.entries || [])) {
+            if (known.has(e.id)) continue;
+            const o = document.createElement('option');
+            o.value = e.id;
+            o.textContent = e.id + (e.group ? '  —  ' + e.group : '');
+            sel.appendChild(o);
+          }
+          if (!sel.options.length) {
+            const o = document.createElement('option');
+            o.value = '';
+            o.textContent = 'nothing left to add';
+            sel.appendChild(o);
+          }
+        } catch (_) {}
+      }
+
       async function saveSettings(body, okMsg) {
         try {
           const r = await fetch('api/settings', {
@@ -2787,6 +2887,30 @@
             }
             settingsNote(d.detail || (want ? 'autostart on' : 'autostart off'));
           } catch (e) { settingsNote('could not change autostart: ' + e); }
+        });
+        on('set-add-service', async () => {
+          const sel = document.getElementById('set-catalog');
+          const port = document.getElementById('set-catalog-port');
+          const note = document.getElementById('set-services-note');
+          const cid = sel ? sel.value : '';
+          if (!cid) { if (note) note.textContent = 'pick a service first'; return; }
+          try {
+            const body = { catalog_id: cid };
+            if (port && port.value) body.port = parseInt(port.value, 10);
+            const r = await fetch('api/services/add', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(body),
+            });
+            const d = await r.json();
+            if (note) note.textContent = d.ok ? ('added ' + cid) : (d.error || 'add failed');
+            if (d.ok) {
+              if (port) port.value = '';
+              const s2 = document.getElementById('set-catalog');
+              if (s2) s2.options.length = 0;
+              loadCatalog();
+              loadServices();
+            }
+          } catch (e) { if (note) note.textContent = 'add failed: ' + e; }
         });
         on('set-scan', async () => {
           const box = document.getElementById('set-heads');
@@ -2883,7 +3007,11 @@
             fetchHistory(true);
           }
         }
-        if (activeTab === 'settings') loadSettings();
+        if (activeTab === 'settings') {
+          loadSettings();
+          loadServices();
+          loadCatalog();
+        }
         try { localStorage.setItem(ACTIVE_TAB_KEY, activeTab); } catch (_) {}
       }
 

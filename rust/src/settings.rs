@@ -188,6 +188,98 @@ pub fn apply(path: &Path, changes: &serde_json::Value) -> Result<Vec<String>, St
     Ok(changed)
 }
 
+/// Add a `[[service]]` block. Appending is safe: every service is its own table.
+///
+/// The id is checked against the file first, because two blocks with one id make the whole config
+/// fail to parse — and that failure would take the dashboard down on the next reload, not here.
+pub fn add_service(path: &Path, block: &str, id: &str) -> Result<(), String> {
+    if id.trim().is_empty() {
+        return Err("a service needs an id".into());
+    }
+    let text = std::fs::read_to_string(path).unwrap_or_default();
+    if service_ids_in(&text).iter().any(|x| x == id) {
+        return Err(format!("a service with id {id:?} already exists"));
+    }
+    let mut out = text.clone();
+    if !out.is_empty() && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out.push('\n');
+    out.push_str(block.trim_end());
+    out.push('\n');
+    write(path, &out)
+}
+
+/// Remove the `[[service]]` block whose `id` matches.
+pub fn remove_service(path: &Path, id: &str) -> Result<(), String> {
+    let text = std::fs::read_to_string(path).unwrap_or_default();
+    let lines: Vec<&str> = text.lines().collect();
+
+    // Each block spans from its `[[service]]` header to the next header of any kind.
+    let headers: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| l.trim().starts_with('['))
+        .map(|(i, _)| i)
+        .collect();
+
+    for (n, &start) in headers.iter().enumerate() {
+        if lines[start].trim() != "[[service]]" {
+            continue;
+        }
+        let end = headers.get(n + 1).copied().unwrap_or(lines.len());
+        let block_id = lines[start..end]
+            .iter()
+            .find_map(|l| {
+                let t = l.trim();
+                t.strip_prefix("id")
+                    .and_then(|r| r.trim().strip_prefix('='))
+                    .map(|v| v.trim().trim_matches('"').to_string())
+            })
+            .unwrap_or_default();
+        if block_id != id {
+            continue;
+        }
+        let mut skip = end;
+        if skip < lines.len() && lines[skip].trim().is_empty() {
+            skip += 1; // swallow one separator so removals do not leave gaps
+        }
+        let head = lines[..start].join("\n");
+        let tail = lines[skip..].join("\n");
+        let mut out = head;
+        if !out.is_empty() && !tail.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(&tail);
+        if !out.ends_with('\n') {
+            out.push('\n');
+        }
+        return write(path, &out);
+    }
+    Err(format!("no such service {id:?}"))
+}
+
+/// Every `id` in a `[[service]]` block, so a duplicate can be refused before it breaks the config.
+pub fn service_ids_in(text: &str) -> Vec<String> {
+    let mut ids = Vec::new();
+    let mut in_service = false;
+    for line in text.lines() {
+        let t = line.trim();
+        if t.starts_with('[') {
+            in_service = t == "[[service]]";
+            continue;
+        }
+        if in_service {
+            if let Some(rest) = t.strip_prefix("id") {
+                if let Some(v) = rest.trim().strip_prefix('=') {
+                    ids.push(v.trim().trim_matches('"').to_string());
+                }
+            }
+        }
+    }
+    ids
+}
+
 /// Path this GUI edits.
 pub fn target(cfg: &crate::config::Config) -> PathBuf {
     cfg.path.clone().unwrap_or_else(crate::config::default_path)
@@ -215,6 +307,48 @@ mod tests {
         assert_eq!(after.matches("port = ").count(), 1, "key duplicated: {after}");
         assert!(after.contains("port = 9000"));
         assert!(after.contains("bind = \"127.0.0.1\""), "clobbered a neighbour");
+    }
+
+    fn tmpfile(body: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("config.toml");
+        std::fs::write(&p, body).unwrap();
+        (dir, p)
+    }
+
+    #[test]
+    fn a_service_can_be_added_and_removed() {
+        let body = "poll_interval = 30\n\n[node]\nid = \"local\"\n\n[[service]]\nid = \"keepme\"\nprobe = \"tcp\"\ntarget = \"127.0.0.1:22\"\n";
+        let (_d, p) = tmpfile(body);
+        add_service(&p, "[[service]]\nid = \"newone\"\nprobe = \"tcp\"\ntarget = \"127.0.0.1:99\"", "newone")
+            .expect("adding must succeed");
+        let after = std::fs::read_to_string(&p).unwrap();
+        assert_eq!(service_ids_in(&after), vec!["keepme", "newone"]);
+
+        remove_service(&p, "newone").expect("removing must succeed");
+        let after = std::fs::read_to_string(&p).unwrap();
+        assert_eq!(service_ids_in(&after), vec!["keepme"], "wrong block removed: {after}");
+        assert!(after.contains("[node]"), "removal ate the node table: {after}");
+    }
+
+    #[test]
+    fn a_duplicate_id_is_refused_before_it_corrupts_the_file() {
+        let body = "[[service]]\nid = \"dup\"\nprobe = \"tcp\"\ntarget = \"127.0.0.1:1\"\n";
+        let (_d, p) = tmpfile(body);
+        let err = add_service(&p, "[[service]]\nid = \"dup\"", "dup").unwrap_err();
+        assert!(err.contains("already exists"), "got {err}");
+        // And the file is untouched, so it still parses.
+        assert_eq!(service_ids_in(&std::fs::read_to_string(&p).unwrap()), vec!["dup"]);
+    }
+
+    #[test]
+    fn removing_the_last_block_leaves_a_valid_file() {
+        let body = "poll_interval = 30\n\n[[service]]\nid = \"only\"\nprobe = \"tcp\"\ntarget = \"x\"\n";
+        let (_d, p) = tmpfile(body);
+        remove_service(&p, "only").unwrap();
+        let after = std::fs::read_to_string(&p).unwrap();
+        assert!(!after.contains("[[service]]"));
+        assert!(after.contains("poll_interval = 30"), "lost the top level: {after}");
     }
 
     #[test]

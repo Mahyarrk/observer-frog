@@ -735,6 +735,77 @@ fn route(req: &Request, app: &Arc<App>) -> (u16, String, Vec<u8>, bool) {
                 Err(e) => (400, json_ct, json_bytes(&json!({"ok": false, "error": e})), false),
             }
         }
+        ("GET" | "HEAD", _) if normalized == "/api/catalog" => {
+            let entries = crate::catalog::load(None).unwrap_or_default();
+            let out: Vec<Value> = entries
+                .iter()
+                .map(|e| json!({
+                    "id": e.id, "group": e.group, "probe": e.probe,
+                    "default_port": e.default_port,
+                }))
+                .collect();
+            (200, json_ct, json_bytes(&json!({"ok": true, "count": out.len(), "entries": out})), false)
+        }
+        ("GET" | "HEAD", _) if normalized == "/api/services" => {
+            // The services this node is monitoring, straight from the file.
+            let path = crate::settings::target(&app.cfg);
+            let text = std::fs::read_to_string(&path).unwrap_or_default();
+            let cfg = crate::config::load(Some(&path)).unwrap_or_else(|_| app.cfg.clone());
+            let ids = crate::settings::service_ids_in(&text);
+            let out: Vec<Value> = cfg
+                .services
+                .iter()
+                .map(|s| json!({
+                    "id": s.id, "name": s.name, "group": s.group,
+                    "probe": s.probe, "target": s.target, "ports": s.ports,
+                }))
+                .collect();
+            (200, json_ct, json_bytes(&json!({"ok": true, "count": out.len(), "services": out, "ids": ids})), false)
+        }
+        ("POST", _) if normalized == "/api/services/add" => {
+            if req.body.len() > MAX_BODY {
+                return (413, json_ct, json_bytes(&json!({"ok": false, "error": "body too large"})), false);
+            }
+            let body: Value = serde_json::from_slice(&req.body).unwrap_or(json!({}));
+            let path = crate::settings::target(&app.cfg);
+            // Two ways in: a catalog id with a port override, or a ready-made block.
+            let result = if let Some(block) = body.get("block").and_then(|v| v.as_str()) {
+                let id = body.get("id").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+                crate::settings::add_service(&path, block, &id)
+            } else {
+                let cid = body.get("catalog_id").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+                let port = body.get("port").and_then(|v| v.as_u64()).map(|p| p as u16);
+                let instance = body.get("instance").and_then(|v| v.as_str()).unwrap_or("");
+                match crate::catalog::load(None) {
+                    Err(e) => Err(format!("cannot load the catalog: {e}")),
+                    Ok(entries) => match crate::catalog::by_id(&entries, &cid) {
+                        None => Err(format!("no catalog entry {cid:?}")),
+                        Some(entry) => match crate::catalog::instantiate(entry, "127.0.0.1", port, instance) {
+                            Err(e) => Err(e.to_string()),
+                            Ok(svc) => {
+                                let block = crate::catalog::to_toml(&svc);
+                                crate::settings::add_service(&path, &block, &svc.id)
+                            }
+                        },
+                    },
+                }
+            };
+            match result {
+                Ok(()) => (200, json_ct, json_bytes(&json!({"ok": true})), false),
+                Err(e) => (400, json_ct, json_bytes(&json!({"ok": false, "error": e})), false),
+            }
+        }
+        ("POST", _) if normalized == "/api/services/remove" => {
+            if req.body.len() > MAX_BODY {
+                return (413, json_ct, json_bytes(&json!({"ok": false, "error": "body too large"})), false);
+            }
+            let body: Value = serde_json::from_slice(&req.body).unwrap_or(json!({}));
+            let id = body.get("id").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+            match crate::settings::remove_service(&crate::settings::target(&app.cfg), &id) {
+                Ok(()) => (200, json_ct, json_bytes(&json!({"ok": true, "removed": id})), false),
+                Err(e) => (400, json_ct, json_bytes(&json!({"ok": false, "error": e})), false),
+            }
+        }
         ("GET" | "HEAD", _) if normalized == "/api/heads" => {
             // Pairing lives here rather than in a CLI flow: the settings page lists what answered.
             let found = crate::lan::find_heads(std::time::Duration::from_millis(1500));
