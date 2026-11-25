@@ -96,7 +96,15 @@ pub fn probe_http(url: &str, expect_status: u16, contains: &str, timeout: f64) -
                 let _ = resp.into_reader().take(200_000).read_to_string(&mut body);
                 let hay = format!("{final_url}\n{body}").to_lowercase();
                 if !hay.contains(&contains.to_lowercase()) {
-                    return result(STATE_DEGRADED, &format!("HTTP {code} (signature missing)"), elapsed);
+                    // `degraded`, not `down`: the service answered, but it did not prove it is the
+                    // service we expected. The wording matters — "signature missing" on a healthy
+                    // 9router sent us hunting a fault in the service instead of in the config,
+                    // twice. Say what is actually unverified.
+                    return result(
+                        STATE_DEGRADED,
+                        &format!("HTTP {code} · reachable, signature {contains:?} not in the response"),
+                        elapsed,
+                    );
                 }
             }
             result(STATE_UP, &format!("HTTP {code}"), elapsed)
