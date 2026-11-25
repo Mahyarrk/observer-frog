@@ -144,14 +144,23 @@ pub fn install(cfg: &config::Config, config_path: Option<&Path>) -> i32 {
     // copy, so re-installing is the documented way to replace a running version.
     let self_path = std::env::current_exe().unwrap_or_default();
     if self_path != binary {
-        if let Err(e) = fs::copy(&self_path, &binary) {
-            eprintln!("cannot copy {} to {}: {e}", self_path.display(), binary.display());
+        // A running service holds its executable open, and replacing it in place fails with
+        // ETXTBSY. Write beside it and rename: rename swaps the directory entry, which is allowed
+        // while the old file is still open, and the service picks up the new one on restart.
+        let staged = binary.with_extension("new");
+        if let Err(e) = fs::copy(&self_path, &staged) {
+            eprintln!("cannot copy {} to {}: {e}", self_path.display(), staged.display());
             return 1;
         }
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let _ = fs::set_permissions(&binary, fs::Permissions::from_mode(0o755));
+            let _ = fs::set_permissions(&staged, fs::Permissions::from_mode(0o755));
+        }
+        if let Err(e) = fs::rename(&staged, &binary) {
+            eprintln!("cannot replace {}: {e}", binary.display());
+            let _ = fs::remove_file(&staged);
+            return 1;
         }
     }
 
