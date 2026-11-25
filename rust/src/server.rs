@@ -139,9 +139,10 @@ impl App {
                     "status": st.state,
                     "detail": st.last_detail,
                     "latency_ms": 0,
-                    // The tail measured this on its own machine; the head only relays it. It must
-                    // never re-resolve a remote port locally — both machines bind 8770.
-                    "ram_mb": st.ram_mb,
+                    // The tail measured this on its own machine; the head only relays it, and must
+                    // never re-resolve a remote port locally — both machines bind 8770. Omitted
+                    // when unknown so the UI renders "—" rather than a confident "0 MB".
+                    "ram_mb": if st.ram_mb > 0.0 { json!(st.ram_mb) } else { Value::Null },
                     "ports": st.ports,
                     "address": st.address,
                 })
