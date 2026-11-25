@@ -205,6 +205,15 @@ pub fn install(cfg: &config::Config, config_path: Option<&Path>) -> i32 {
         }
     }
 
+    // Tell the init system about the file we just wrote. Without this, a re-install leaves systemd
+    // running the previous definition and printing "unit changed on disk" on the next restart —
+    // a warning the user did nothing to cause and cannot act on.
+    if cfg!(target_os = "linux") {
+        let _ = std::process::Command::new("systemctl")
+            .args(["--user", "daemon-reload"])
+            .output();
+    }
+
     println!("installed as {} ({role})", unit.display());
     println!("  binary {}", binary.display());
     println!("  config {}", config_path.display());
