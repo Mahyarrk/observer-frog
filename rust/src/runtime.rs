@@ -226,7 +226,8 @@ pub fn run(cfg: Config, config_path: Option<PathBuf>, tls: Option<(PathBuf, Path
                 if !acting_head && was_head.swap(false, Ordering::SeqCst) {
                     match crate::db::forget_other_nodes(&app.cfg.db_path, &app.cfg.node_id) {
                         Ok(n) if n > 0 => log_line(&format!(
-                            "stopped acting as head: cleared {n} rows for other machines"
+                            "stopped acting as head: cleared {n} rows for other machines (keeping {})",
+                            app.cfg.node_id
                         )),
                         Ok(_) => {}
                         Err(e) => log_line(&format!("could not clear the node roster: {e}")),
