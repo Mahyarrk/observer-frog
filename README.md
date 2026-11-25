@@ -8,11 +8,8 @@ wrote this.
 It watches the services you list, records when they go down and come back, keeps 30 days of uptime,
 and serves a PWA you can install on your home screen.
 
-Pre-alpha. The single-machine version runs and is verified against a reference implementation.
-Remote nodes do not exist yet.
-
-It ships as one static binary. No runtime, no description file inside it, no temp directory
-extracted at launch.
+Pre-alpha, and single-machine only: remote nodes do not exist yet. It ships as one static binary,
+with no runtime and no temp directory extracted at launch.
 
 ## Quick start
 
@@ -99,11 +96,12 @@ reported as your service.
 ## Things it deliberately does not do
 
 No Docker. A container cannot see host processes, its own cgroup is not the host's memory, and
-published ports are not the real listeners. Run it natively; mine sits around 40 MB resident.
+published ports are not the real listeners. Run it natively; mine sits around 8 MB resident.
 
-No TLS termination and no certificate authority. It accepts `--tls-cert` and `--tls-key` and
-otherwise expects you to front it with your reverse proxy or a VPN. Bind loopback by default and put
-Caddy, nginx, WireGuard or Tailscale in front.
+No certificate authority. The binary terminates TLS itself when you give it `--tls-cert` and
+`--tls-key`, but it will not issue or renew anything, so the certificate is yours to obtain. Bind
+loopback by default and put Caddy, nginx, WireGuard or Tailscale in front if you would rather not
+manage certificates at all.
 
 No service control. There is no start or stop endpoint, so a bad token cannot restart anything.
 
@@ -130,8 +128,8 @@ surprise you. The catalog is a curated list, not a discovery engine.
 ## Checking a machine without starting the server
 
 ```bash
-$FROG metrics   # this host's numbers
-$FROG status    # resolved config and database
+./target/release/observer-frog metrics   # this host's numbers
+./target/release/observer-frog status    # resolved config and database
 ```
 
 ## Tests
@@ -150,12 +148,11 @@ reading healthy for hours.
 The code was written by AI agents running in Hermes Agent, under my direction. I did not type it,
 and I am not going to imply otherwise.
 
-It began in Python, which is still on the `python-v0.1` branch, frozen. I moved to Rust for
-distribution: a 2.5 MB binary that needs no runtime and no extracted temp directory beats a 48 MB
-single-file Python executable that antivirus software flags. The port is verified rather than
-asserted. `rust/parity.py` runs both builds against the same configuration and compares every
-endpoint, every service state and every response shape; they serve byte-identical web assets. The
-Rust build uses 8 MB of memory where the Python one uses 40.
+It began in Python, which is frozen on the `python-v0.1` branch. Rust replaced it for distribution:
+2.6 MB, against 48 MB for a single-file Python executable that antivirus software flags. Both builds
+are kept honest by `rust/parity.py`, which runs them against the same configuration and compares every
+endpoint, service state and response shape; they serve byte-identical web assets. Memory is 8 MB
+against 40.
 
 What I did was the part that decides whether the result is any good. I set the constraints: native
 install only, no container, one binary with independent `serve` and `report_to` flags instead of a
