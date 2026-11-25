@@ -12,7 +12,7 @@ use crate::state;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::TcpListener;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -311,65 +311,64 @@ struct Request {
     body: Vec<u8>,
 }
 
-fn handle(mut stream: TcpStream, app: Arc<App>) {
-    let peer_ok = stream.set_read_timeout(Some(std::time::Duration::from_secs(10))).is_ok();
-    if !peer_ok {
-        return;
-    }
-    let mut reader = BufReader::new(match stream.try_clone() {
-        Ok(s) => s,
-        Err(_) => return,
-    });
-
-    let mut line = String::new();
-    if reader.read_line(&mut line).unwrap_or(0) == 0 {
-        return;
-    }
-    let mut parts = line.split_whitespace();
-    let method = parts.next().unwrap_or("").to_string();
-    let raw_path = parts.next().unwrap_or("/").to_string();
-
-    let mut headers: HashMap<String, String> = HashMap::new();
-    loop {
-        let mut h = String::new();
-        if reader.read_line(&mut h).unwrap_or(0) == 0 {
-            break;
+fn handle<S: Read + Write>(mut stream: S, app: Arc<App>) {
+    // Parse the request inside one borrow of the stream, then write the response after it drops.
+    let req = {
+        let mut reader = BufReader::new(&mut stream);
+        let mut line = String::new();
+        if reader.read_line(&mut line).unwrap_or(0) == 0 {
+            return;
         }
-        let trimmed = h.trim_end();
-        if trimmed.is_empty() {
-            break;
-        }
-        if let Some((k, v)) = trimmed.split_once(':') {
-            headers.insert(k.trim().to_lowercase(), v.trim().to_string());
-        }
-    }
+        let mut parts = line.split_whitespace();
+        let method = parts.next().unwrap_or("").to_string();
+        let raw_path = parts.next().unwrap_or("/").to_string();
 
-    let length: usize = headers.get("content-length").and_then(|v| v.parse().ok()).unwrap_or(0);
-    let mut body = vec![0u8; length.min(MAX_BODY * 4)];
-    if length > 0 && length <= body.len() {
-        let _ = reader.read_exact(&mut body);
-    }
+        let mut headers: HashMap<String, String> = HashMap::new();
+        loop {
+            let mut h = String::new();
+            if reader.read_line(&mut h).unwrap_or(0) == 0 {
+                break;
+            }
+            let trimmed = h.trim_end();
+            if trimmed.is_empty() {
+                break;
+            }
+            if let Some((k, v)) = trimmed.split_once(':') {
+                headers.insert(k.trim().to_lowercase(), v.trim().to_string());
+            }
+        }
 
-    let (path_part, query_part) = match raw_path.split_once('?') {
-        Some((p, q)) => (p, q),
-        None => (raw_path.as_str(), ""),
+        let length: usize = headers
+            .get("content-length")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+        let mut body = vec![0u8; length.min(MAX_BODY * 4)];
+        if length > 0 && length <= body.len() {
+            let _ = reader.read_exact(&mut body);
+        }
+
+        let (path_part, query_part) = match raw_path.split_once('?') {
+            Some((p, q)) => (p, q),
+            None => (raw_path.as_str(), ""),
+        };
+        let path = {
+            let trimmed = path_part.trim_end_matches('/');
+            if trimmed.is_empty() { "/".to_string() } else { trimmed.to_string() }
+        };
+        let query: HashMap<String, String> = query_part
+            .split('&')
+            .filter(|s| !s.is_empty())
+            .map(|kv| match kv.split_once('=') {
+                Some((k, v)) => (k.to_string(), urldecode(v)),
+                None => (kv.to_string(), String::new()),
+            })
+            .collect();
+
+        Request { method, path, query, body }
     };
-    let path = {
-        let trimmed = path_part.trim_end_matches('/');
-        if trimmed.is_empty() { "/".to_string() } else { trimmed.to_string() }
-    };
-    let query: HashMap<String, String> = query_part
-        .split('&')
-        .filter(|s| !s.is_empty())
-        .map(|kv| match kv.split_once('=') {
-            Some((k, v)) => (k.to_string(), urldecode(v)),
-            None => (kv.to_string(), String::new()),
-        })
-        .collect();
 
-    let req = Request { method: method.clone(), path, query, body };
     let (code, ctype, payload, cors) = route(&req, &app);
-    let head_only = method == "HEAD";
+    let head_only = req.method == "HEAD";
     let mut out = Vec::new();
     out.extend_from_slice(format!("HTTP/1.1 {code} {}\r\n", reason(code)).as_bytes());
     out.extend_from_slice(format!("Content-Type: {ctype}\r\n").as_bytes());
@@ -508,20 +507,60 @@ fn route(req: &Request, app: &Arc<App>) -> (u16, String, Vec<u8>, bool) {
 }
 
 /// Bind and serve. Returns the bound port (useful when port 0 was requested).
+///
+/// With a cert and key every accepted connection is wrapped in TLS before the HTTP parser sees
+/// it, so the request handler stays unaware of the transport.
 pub fn serve(app: Arc<App>, bind: &str, port: u16, tls: Option<(PathBuf, PathBuf)>) -> std::io::Result<u16> {
     let listener = TcpListener::bind((bind, port))?;
     let actual = listener.local_addr()?.port();
-    let _ = tls; // TLS termination stays the reverse proxy's job in v0.1.
+
+    let config = match tls {
+        Some((cert, key)) => Some(Arc::new(tls_config(&cert, &key)?)),
+        None => None,
+    };
+
     std::thread::spawn(move || {
         for stream in listener.incoming() {
-            match stream {
-                Ok(s) => {
-                    let app = Arc::clone(&app);
-                    std::thread::spawn(move || handle(s, app));
+            let Ok(stream) = stream else { break };
+            let app = Arc::clone(&app);
+            match config.clone() {
+                None => {
+                    std::thread::spawn(move || handle(stream, app));
                 }
-                Err(_) => break,
+                Some(cfg) => {
+                    std::thread::spawn(move || {
+                        let Ok(conn) = rustls::ServerConnection::new(cfg) else { return };
+                        let mut tls = rustls::StreamOwned::new(conn, stream);
+                        handle(&mut tls, app);
+                    });
+                }
             }
         }
     });
     Ok(actual)
+}
+
+/// Build a rustls server config from a PEM certificate chain and key.
+fn tls_config(cert_path: &PathBuf, key_path: &PathBuf) -> std::io::Result<rustls::ServerConfig> {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    });
+
+    let certs: Vec<_> = rustls_pemfile::certs(&mut std::io::BufReader::new(
+        std::fs::File::open(cert_path).map_err(|e| std::io::Error::new(std::io::ErrorKind::NotFound, format!("{}: {e}", cert_path.display())))?,
+    ))
+    .collect::<Result<_, _>>()
+    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+
+    let key = rustls_pemfile::private_key(&mut std::io::BufReader::new(
+        std::fs::File::open(key_path).map_err(|e| std::io::Error::new(std::io::ErrorKind::NotFound, format!("{}: {e}", key_path.display())))?,
+    ))
+    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?
+    .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "no private key in file"))?;
+
+    rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(certs, key)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
 }
