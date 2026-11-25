@@ -1884,6 +1884,10 @@
             <span>Report to a head (tail)</span>
             <input type="text" id="set-report-to" placeholder="http://192.0.2.10:8771" />
           </label>
+          <p class="settings-warning" id="set-head-warn" hidden>
+            No head paired: outgoing data is stopped. Add a head address above and untick
+            "serve the dashboard" to start reporting.
+          </p>
           <button class="settings-btn" id="set-save-role" type="button">Save role</button>
         </div>
 
@@ -2061,7 +2065,7 @@
       const API_BASE = (window.location.pathname.replace(/\/$/, '') || '');
       // Bump on every shell change. Declared before first use: a `const` referenced above its
       // declaration throws a TDZ error and takes the whole script down (it did).
-      const BUILD = 'of-12';
+      const BUILD = 'of-13';
       // Show the address actually in use, not a baked-in host.
       (function () {
         const el = document.getElementById('brand-url');
@@ -2866,6 +2870,13 @@
         if (!d || !d.ok) return;
         const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v ?? '—'; };
         set('set-role', d.role);
+        // Red sentence, not a crash: a node with no head paired simply stops sending, and this
+        // explains why. Ticking "serve" makes it moot, because a head has nothing to send to.
+        const warn = document.getElementById('set-head-warn');
+        if (warn) warn.hidden = d.serve || d.head_paired;
+        if (!d.token_ok && d.head_paired && !d.serve) {
+          if (warn) { warn.hidden = false; warn.textContent = 'No token for that head: reporting will be refused. Set token_file in the config.'; }
+        }
         set('set-path', d.config_path);
         set('set-db', d.db_path);
         const serve = document.getElementById('set-serve');
@@ -3119,13 +3130,7 @@
           });
           const d = await r.json();
           if (!d.ok) { settingsNote(d.error || 'save failed'); return; }
-          if (d.restart) {
-            // The service restarts itself in a moment, so this page will lose its server. Say so
-            // instead of leaving the operator watching a dashboard that quietly stops answering.
-            settingsNote(okMsg + ' — ' + d.restart + ', reconnecting…');
-            return;
-          }
-          settingsNote(okMsg + ' — applied on the next poll');
+          settingsNote(okMsg + ' — live now');
           await loadSettings();
         } catch (e) { settingsNote('save failed: ' + e); }
       }

@@ -189,27 +189,14 @@ pub fn apply(path: &Path, changes: &serde_json::Value) -> Result<Vec<String>, St
     if changed.is_empty() {
         return Ok(changed);
     }
-    // Never let an unparseable file reach disk. The failure it causes is silent and severe: the
-    // node exits at startup, the service manager restarts it forever, and the page that wrote the
-    // file is gone by the time anyone looks.
-    // The loader is the only thing that knows this format, so ask it rather than trusting the text.
+    // Never let an unparseable file reach disk. Nothing exits at startup any more, so this is no
+    // longer about spin loops: a config the loader cannot read leaves the node with no settings at
+    // all, and the operator's only way back in is editing the file by hand.
     let probe = path.with_extension("probe.toml");
     std::fs::write(&probe, &text).map_err(|e| format!("cannot check the new config: {e}"))?;
     let parsed = crate::config::load(Some(&probe));
     let _ = std::fs::remove_file(&probe);
-    let parsed = parsed.map_err(|e| format!("that change would write a config that does not parse: {e}"))?;
-    if !parsed.serve && parsed.report_to.is_none() {
-        return Err("a node must either serve or report to a head; that combination would exit on start".into());
-    }
-    // A tail authenticates to its head, so it needs a token that survives having no shell. Without
-    // one the process exits at startup and the supervisor retries it forever — the same silent spin
-    // loop as having no role at all, just one step later.
-    if parsed.report_to.is_some() && parsed.token().is_err() {
-        return Err(
-            "switching to a tail needs a token for the head first: set token_file in the config, then try again"
-                .into(),
-        );
-    }
+    parsed.map_err(|e| format!("that change would write a config that does not parse: {e}"))?;
     write(path, &text)?;
     Ok(changed)
 }

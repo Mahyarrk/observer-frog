@@ -693,6 +693,11 @@ fn route(req: &Request, app: &Arc<App>) -> (u16, String, Vec<u8>, bool) {
                 "ok": true,
                 "role": role,
                 "serve": cfg.serve,
+                // A tail with nowhere to send its data is a legitimate configuration, and the page
+                // says so in red rather than the process dying over it.
+                "head_paired": cfg.report_to.is_some(),
+                "paused": cfg.serve && cfg.report_to.is_some(),
+                "token_ok": cfg.token().is_ok(),
                 "bind": cfg.bind,
                 "port": cfg.port,
                 "report_port": cfg.report_port,
@@ -714,18 +719,10 @@ fn route(req: &Request, app: &Arc<App>) -> (u16, String, Vec<u8>, bool) {
             let path = crate::settings::target(&app.cfg);
             match crate::settings::apply(&path, &body) {
                 Ok(changed) => {
-                    // The role is read at startup, so a change only lands on a fresh process. The
-                    // page says "changed"; this makes it true, without the operator opening a shell.
-                    let restart = changed.iter().any(|k| k == "serve.enabled" || k == "report_to" || k == "serve.port" || k == "serve.bind");
-                    let mut note = Value::Null;
-                    if restart {
-                        note = match crate::install::restart_soon(1200) {
-                            Ok(_) => json!("restarting to apply the new role"),
-                            Err(e) => json!(format!("saved, but not restarted: {e}")),
-                        };
-                    }
+                    // No restart and no unit rewrite: acting as head is read by the sweeper each
+                    // tick and reporting is read each wave, so the change is live within seconds.
                     (200, json_ct, json_bytes(&json!({
-                        "ok": true, "changed": changed, "path": path.display().to_string(), "restart": note,
+                        "ok": true, "changed": changed, "path": path.display().to_string(),
                     })), false)
                 }
                 Err(e) => (500, json_ct, json_bytes(&json!({"ok": false, "error": e})), false),

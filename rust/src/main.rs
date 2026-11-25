@@ -392,15 +392,13 @@ fn cmd_serve(cfg: &config::Config, args: &[String], config_path: Option<PathBuf>
     // One binary, both roles, one runtime. A node always binds its own port — so a tail has its
     // own settings page on its own IP — and reports upstream when `report_to` is set. The only
     // thing `serve` decides is whether this node also sweeps other nodes for silence.
-    if !cfg.serve && cfg.report_to.is_none() {
-        eprintln!("serve = false and no report_to: this node has nothing to do.");
-        eprintln!("Set report_to to run as a tail, or serve = true to run as a head.");
-        return 2;
-    }
+    // A node with neither duty is idle, not broken. It keeps its own dashboard, its own probes and
+    // its own Settings page, and says plainly in the UI that no head is paired — instead of exiting
+    // and leaving a supervisor to restart it forever.
     if cfg.report_to.is_some() {
         if let Err(e) = cfg.token() {
-            eprintln!("cannot report: {e}");
-            return 2;
+            // Warn, do not exit: the operator can still open Settings and fix the token from there.
+            eprintln!("cannot report yet: {e}");
         }
     }
 

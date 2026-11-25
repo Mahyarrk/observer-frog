@@ -154,7 +154,10 @@ pub fn run(cfg: Config, config_path: Option<PathBuf>, tls: Option<(PathBuf, Path
                         }
                         // One binary, both roles: this same wave is what gets reported. A separate
                         // reporter thread would probe every service a second time for nothing.
-                        if let Some(head) = cfg_now.report_to.clone() {
+                        // Not acting as a tail, or no head paired: skip quietly. Silence here is a
+                        // configured state the UI explains, not a failure to log every wave.
+                        let wants_to_report = cfg_now.report_to.is_some() && cfg_now.token().is_ok();
+                        if let Some(head) = cfg_now.report_to.clone().filter(|_| wants_to_report) {
                             match crate::tail::report_once(&cfg_now, &head, &rows, ts) {
                                 Ok(_) => {
                                     app.reports_ok.fetch_add(1, Ordering::Relaxed);
@@ -194,9 +197,11 @@ pub fn run(cfg: Config, config_path: Option<PathBuf>, tls: Option<(PathBuf, Path
         });
     }
 
-    // Silence sweeper: its own clock, because it must run even on a head that probes nothing.
-    // A tail has no remote nodes to watch, so it never sweeps.
-    if cfg.serve {
+    // Silence sweeper: always running. Whether this node *acts* as head is a switch the operator
+    // flips in Settings, and a thread that only exists when the box was ticked at boot would need a
+    // process restart to follow it — the restart being exactly the thing this design removes.
+    // The check is per tick instead, so ticking the box takes effect on the next wave.
+    {
         let app = Arc::clone(&app);
         let halt = Arc::clone(&sweeper_halt);
         std::thread::spawn(move || {
@@ -204,6 +209,21 @@ pub fn run(cfg: Config, config_path: Option<PathBuf>, tls: Option<(PathBuf, Path
             // the grace window rather than a whole interval late.
             let tick: f64 = 5.0;
             while !halt.load(Ordering::SeqCst) {
+                // Acting as head is a setting, not an identity: read it every tick so the checkbox
+                // takes effect within five seconds, with no restart and no unit rewrite.
+                let acting_head = match watcher_holder.lock().unwrap().as_mut() {
+                    Some(w) => w.refresh().serve,
+                    None => app.cfg.serve,
+                };
+                if !acting_head {
+                    let mut left = tick;
+                    while left > 0.0 && !halt.load(Ordering::SeqCst) {
+                        let slice = left.min(0.25);
+                        std::thread::sleep(Duration::from_secs_f64(slice));
+                        left -= slice;
+                    }
+                    continue;
+                }
                 let now = crate::db::now();
                 match silence::sweep(&app.cfg.db_path, now, &app.cfg.node_id) {
                     Ok(swept) => {
