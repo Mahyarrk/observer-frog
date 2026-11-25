@@ -222,6 +222,8 @@ pub fn candidates(entries: &[Entry], host: &str, monitored: &[String]) -> Vec<Ca
 
         if monitored.iter().any(|m| m == &entry.id) {
             state = CAND_ALREADY;
+            // Still offered: the operator may be looking for a service they already run, to change
+            // its port or simply to confirm it is watched. Hiding it makes the list a puzzle.
             detail = "already on this dashboard".into();
         } else if entry.probe == "http" || entry.probe == "tcp" {
             match entry.default_port {

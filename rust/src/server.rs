@@ -770,7 +770,9 @@ fn route(req: &Request, app: &Arc<App>) -> (u16, String, Vec<u8>, bool) {
             let out: Vec<Value> = entries
                 .iter()
                 .map(|e| json!({
-                    "id": e.id, "group": e.group, "probe": e.probe,
+                    // The picker shows the friendly name with the id beside it; without `name`
+                    // every row read as a bare lowercase id.
+                    "id": e.id, "name": e.name, "group": e.group, "probe": e.probe,
                     "default_port": e.default_port,
                 }))
                 .collect();

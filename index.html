@@ -474,6 +474,39 @@
       letter-spacing: .02em;
     }
     .settings-custom { display: flex; flex-direction: column; gap: 8px; }
+
+    /* Custom service picker: the stock <select> cannot show an icon per row, and it ignores the
+       dashboard's own colours on macOS. */
+    .svc-picker { position: relative; min-width: 240px; }
+    .svc-picker-btn {
+      display: flex; align-items: center; justify-content: space-between; gap: 10px;
+      width: 100%; font: inherit; font-size: 13px; padding: 8px 11px;
+      background: var(--bg-subtle); color: inherit; cursor: pointer;
+      border: 1px solid var(--border-subtle); border-radius: 9px;
+    }
+    .svc-picker-btn:hover { background: var(--bg-card-hover); border-color: var(--border-highlight); }
+    .svc-picker-btn:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: 1px; }
+    .svc-picker-current { display: flex; align-items: center; gap: 9px; min-width: 0; }
+    .svc-picker-current > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .svc-picker-ico { display: inline-flex; width: 15px; color: var(--accent-blue); }
+    .svc-picker-caret { opacity: .6; flex: none; }
+    .svc-picker-menu {
+      position: absolute; z-index: 40; left: 0; right: 0; top: calc(100% + 6px);
+      max-height: 290px; overflow-y: auto; padding: 6px;
+      background: var(--bg-elevated); border: 1px solid var(--border-highlight);
+      border-radius: 11px; box-shadow: 0 12px 28px rgba(0,0,0,.35);
+    }
+    .svc-opt {
+      display: flex; align-items: center; gap: 10px; width: 100%;
+      padding: 8px 10px; border-radius: 8px; cursor: pointer;
+      font-size: 13px; color: inherit; background: none; border: 0; text-align: left;
+    }
+    .svc-opt:hover, .svc-opt.is-active { background: var(--bg-card-hover); }
+    .svc-opt-ico { display: inline-flex; width: 15px; color: var(--accent-blue); flex: none; }
+    .svc-opt-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .svc-opt-group { font-size: 11px; opacity: .55; flex: none; }
+    .svc-opt-added { font-size: 10px; letter-spacing: .06em; opacity: .8; flex: none;
+      padding: 1px 6px; border-radius: 6px; border: 1px solid var(--border-subtle); }
     .settings-cand-taken { opacity: .75; }
     .settings-head {
       display: flex; justify-content: space-between; align-items: center; gap: 10px;
@@ -1872,6 +1905,9 @@
             <h3 class="settings-sub">Installed, not running</h3>
             <div id="set-cand-notrunning" class="settings-heads"></div>
 
+            <h3 class="settings-sub">Already on this dashboard</h3>
+            <div id="set-cand-already" class="settings-heads"></div>
+
             <h3 class="settings-sub" id="set-cand-taken-title" hidden>Port held by something else</h3>
             <p class="settings-hint" id="set-cand-taken-hint" hidden>
               These cannot be added on their default port — something else is using it.
@@ -1889,7 +1925,19 @@
                 signature check runs before it is accepted.
               </p>
               <div class="settings-add">
-                <select id="set-catalog" class="settings-select"></select>
+                <div class="svc-picker" id="svc-picker">
+                  <button class="svc-picker-btn" id="svc-picker-btn" type="button"
+                          aria-haspopup="listbox" aria-expanded="false">
+                    <span class="svc-picker-current">
+                      <span class="svc-picker-ico" id="svc-picker-ico"></span>
+                      <span id="svc-picker-label">Choose a service…</span>
+                    </span>
+                    <svg class="svc-picker-caret" width="12" height="12" viewBox="0 0 24 24"
+                         fill="none" stroke="currentColor" stroke-width="2.4"
+                         stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                  </button>
+                  <div class="svc-picker-menu" id="svc-picker-menu" role="listbox" hidden></div>
+                </div>
                 <input type="number" id="set-catalog-port" placeholder="port" min="1" max="65535" />
                 <button class="settings-btn" id="set-add-service" type="button">Verify and add</button>
               </div>
@@ -2013,7 +2061,7 @@
       const API_BASE = (window.location.pathname.replace(/\/$/, '') || '');
       // Bump on every shell change. Declared before first use: a `const` referenced above its
       // declaration throws a TDZ error and takes the whole script down (it did).
-      const BUILD = 'of-10';
+      const BUILD = 'of-12';
       // Show the address actually in use, not a baked-in host.
       (function () {
         const el = document.getElementById('brand-url');
@@ -2250,6 +2298,30 @@
 
       function getGroupIconSvg(groupName) {
         switch (groupName) {
+          case 'Agents':
+            return '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="8" width="16" height="12" rx="3"></rect><circle cx="9" cy="14" r="1.4"></circle><circle cx="15" cy="14" r="1.4"></circle><line x1="12" y1="8" x2="12" y2="4"></line><circle cx="12" cy="3" r="1.4"></circle></svg>';
+          case 'Containers':
+            return '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="5" rx="1.5"></rect><rect x="3" y="10.5" width="18" height="5" rx="1.5"></rect><rect x="3" y="17" width="18" height="4" rx="1.5"></rect></svg>';
+          case 'Game Servers':
+            return '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9h12a3 3 0 0 1 3 3v4a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3v-4a3 3 0 0 1 3-3z"></path><line x1="8" y1="13" x2="18" y2="13"></line><line x1="10" y1="16" x2="14" y2="16"></line></svg>';
+          case 'Local LLM':
+            return '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="14" height="14" rx="3"></rect><path d="M9 10h6M9 14h4"></path></svg>';
+          case 'Messaging':
+            return '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.4 8.4 0 0 1-12.2 7.5L3 21l1.9-5.6A8.4 8.4 0 0 1 12.6 3a8.4 8.4 0 0 1 8.4 8.5z"></path></svg>';
+          case 'Monitoring':
+            return '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 13 8 8 12 12 16 6 21 11"></polyline><line x1="3" y1="19" x2="21" y2="19"></line></svg>';
+          case 'Remote Access':
+            return '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="14" rx="3"></rect><polyline points="7 9 10 12 7 15"></polyline><line x1="12" y1="9" x2="17" y2="9"></line><line x1="12" y1="13" x2="17" y2="13"></line></svg>';
+          case 'Search':
+            return '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><circle cx="10.5" cy="10.5" r="6.5"></circle><line x1="15.5" y1="15.5" x2="21" y2="21"></line></svg>';
+          case 'Security':
+            return '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 4 6v6c0 5 3.4 8.6 8 10 4.6-1.4 8-5 8-10V6z"></path><polyline points="9 12 11 14 15 10"></polyline></svg>';
+          case 'Streaming':
+            return '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="3"></rect><polygon points="10 9 15 12 10 15"></polygon></svg>';
+          case 'Sync':
+            return '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 7 20 3 16 3"></polyline><path d="M20 12a8 8 0 0 1-8 8 8 8 0 0 1-6.9-4"></path><polyline points="4 17 4 21 8 21"></polyline><path d="M4 12a8 8 0 0 1 8-8 8 8 0 0 1 6.9 4"></path></svg>';
+          case 'Web':
+            return '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><line x1="3" y1="12" x2="21" y2="12"></line><path d="M12 3a14 14 0 0 1 3.5 9 14 14 0 0 1-3.5 9 14 14 0 0 1-3.5-9 14 14 0 0 1 3.5-9z"></path></svg>';
           case 'Core':
             return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 12 22 7 12 2"></polygon><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>';
           case 'Model Routing':
@@ -2822,6 +2894,7 @@
         let d;
         try { d = await (await fetch('api/services', { cache: 'no-store' })).json(); } catch (_) { return; }
         if (!d || !d.ok) return;
+        monitoredIds = d.ids || [];
         box.textContent = '';
         if (!d.count) {
           const empty = document.createElement('span');
@@ -2915,6 +2988,10 @@
         const add = (it) => addCatalogService(it.id, it.default_port);
         paint('set-cand-available', d.available, 'Add', add, false);
         paint('set-cand-notrunning', d.not_running, 'Add', add, true);
+        // Already-monitored services stay in the list, clearly marked. An empty "available" bucket
+        // used to read as "nothing can be added", which was strictly speaking true and completely
+        // useless when what you wanted was to find a service you already run.
+        paint('set-cand-already', d.already, 'Monitored', null, true);
         // port-taken is shown, never offered: the port is not free, and saying who holds it is
         // the single most useful fact on this panel.
         const taken = d.port_taken || [];
@@ -2948,28 +3025,88 @@
         } catch (e) { if (note) note.textContent = 'add failed: ' + e; }
       }
 
+      // ---- custom service picker ----
+      let catalogEntries = [];
+      let pickedService = null;
+      let monitoredIds = [];
+
+      function closePicker() {
+        const menu = document.getElementById('svc-picker-menu');
+        const btn = document.getElementById('svc-picker-btn');
+        if (menu) menu.hidden = true;
+        if (btn) btn.setAttribute('aria-expanded', 'false');
+      }
+
+      function paintPicked(entry) {
+        pickedService = entry;
+        const label = document.getElementById('svc-picker-label');
+        const ico = document.getElementById('svc-picker-ico');
+        if (label) label.textContent = entry ? (entry.name || entry.id) : 'Choose a service…';
+        if (ico) ico.innerHTML = entry ? getGroupIconSvg(entry.group) : '';
+        const port = document.getElementById('set-catalog-port');
+        if (port && entry && entry.default_port) port.value = entry.default_port;
+      }
+
+      function renderPickerMenu() {
+        const menu = document.getElementById('svc-picker-menu');
+        if (!menu) return;
+        // Match on display name and on id: a dashboard entry may be named "Hermes API" while the
+        // catalog entry is `hermes`, and comparing one against the other alone missed it.
+        const monitored = new Set();
+        for (const n of document.querySelectorAll('#set-services .settings-head-name')) {
+          monitored.add(n.textContent.trim().toLowerCase());
+        }
+        for (const id of (monitoredIds || [])) {
+          monitored.add(String(id).toLowerCase());
+        }
+        menu.textContent = '';
+        for (const e of catalogEntries) {
+          const opt = document.createElement('button');
+          opt.className = 'svc-opt';
+          opt.type = 'button';
+          // Every service stays listed, added or not: a dropdown that hides what you already run
+          // is how you end up unable to find the thing you are looking for. Already-running
+          // entries are marked instead.
+          if (monitored.has((e.name || e.id).toLowerCase())) {
+            opt.classList.add('is-active');
+          }
+          const ico = document.createElement('span');
+          ico.className = 'svc-opt-ico';
+          ico.innerHTML = getGroupIconSvg(e.group);
+          const nm = document.createElement('span');
+          nm.className = 'svc-opt-name';
+          nm.textContent = e.name || e.id;
+          const grp = document.createElement('span');
+          grp.className = 'svc-opt-group';
+          grp.textContent = e.group || '';
+          opt.appendChild(ico); opt.appendChild(nm);
+          if (monitored.has((e.name || e.id).toLowerCase())) {
+            const tag = document.createElement('span');
+            tag.className = 'svc-opt-added';
+            tag.textContent = 'ADDED';
+            opt.appendChild(tag);
+          } else {
+            opt.appendChild(grp);
+          }
+          opt.addEventListener('click', () => {
+            paintPicked(e);
+            closePicker();
+          });
+          menu.appendChild(opt);
+        }
+      }
+
       async function loadCatalog() {
-        const sel = document.getElementById('set-catalog');
-        if (!sel || sel.options.length) return;
+        const menu = document.getElementById('svc-picker-menu');
+        if (!menu || catalogEntries.length) return;
         try {
-          // The catalog ships with the binary; list it so a service can be added by name.
-          const r = await fetch('api/services', { cache: 'no-store' });
-          const d = await r.json();
-          const known = new Set(d.ids || []);
+          // Every catalog entry, always. The picker marks the ones already monitored rather than
+          // filtering them out, so the same list is both "what can I add" and "what do I run".
           const cat = await (await fetch('api/catalog', { cache: 'no-store' })).json();
-          for (const e of (cat.entries || [])) {
-            if (known.has(e.id)) continue;
-            const o = document.createElement('option');
-            o.value = e.id;
-            o.textContent = e.id + (e.group ? '  —  ' + e.group : '');
-            sel.appendChild(o);
-          }
-          if (!sel.options.length) {
-            const o = document.createElement('option');
-            o.value = '';
-            o.textContent = 'nothing left to add';
-            sel.appendChild(o);
-          }
+          catalogEntries = (cat.entries || []).slice()
+            .sort((a, b) => (a.group || '').localeCompare(b.group || '')
+              || (a.name || a.id).localeCompare(b.name || b.id));
+          renderPickerMenu();
         } catch (_) {}
       }
 
@@ -3029,11 +3166,30 @@
           c.hidden = !c.hidden;
           if (!c.hidden) loadCatalog();
         });
+        on('svc-picker-btn', () => {
+          const menu = document.getElementById('svc-picker-menu');
+          const btn = document.getElementById('svc-picker-btn');
+          if (!menu) return;
+          const open = menu.hidden;
+          menu.hidden = !open;
+          if (btn) btn.setAttribute('aria-expanded', String(open));
+          if (open) {
+            loadCatalog();
+            renderPickerMenu();
+          }
+        });
+        // Anywhere outside closes it, the way a native menu behaves.
+        document.addEventListener('click', (ev) => {
+          const picker = document.getElementById('svc-picker');
+          if (picker && !picker.contains(ev.target)) closePicker();
+        });
+        document.addEventListener('keydown', (ev) => {
+          if (ev.key === 'Escape') closePicker();
+        });
         on('set-add-service', async () => {
-          const sel = document.getElementById('set-catalog');
           const port = document.getElementById('set-catalog-port');
           const note = document.getElementById('set-services-note');
-          const cid = sel ? sel.value : '';
+          const cid = pickedService ? pickedService.id : '';
           if (!cid) { if (note) note.textContent = 'pick a service first'; return; }
           try {
             const body = { catalog_id: cid };
@@ -3046,10 +3202,7 @@
             if (note) note.textContent = d.ok ? ('added ' + cid) : (d.error || 'add failed');
             if (d.ok) {
               if (port) port.value = '';
-              const s2 = document.getElementById('set-catalog');
-              if (s2) s2.options.length = 0;
-              loadCatalog();
-              loadServices();
+              loadServices().then(() => renderPickerMenu());
             }
           } catch (e) { if (note) note.textContent = 'add failed: ' + e; }
         });
