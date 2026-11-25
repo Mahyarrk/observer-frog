@@ -1822,7 +1822,7 @@
       const API_BASE = (window.location.pathname.replace(/\/$/, '') || '');
       // Bump on every shell change. Declared before first use: a `const` referenced above its
       // declaration throws a TDZ error and takes the whole script down (it did).
-      const BUILD = 'of-6';
+      const BUILD = 'of-7';
       // Show the address actually in use, not a baked-in host.
       (function () {
         const el = document.getElementById('brand-url');
@@ -1980,9 +1980,15 @@
       const elConnectionAlertText = document.getElementById('connection-alert-text');
       const elPwaMode = document.getElementById('pwa-mode-indicator');
 
+      // Per node: one shared cache key meant the laptop tab could paint the Mac's cached
+      // snapshot under the laptop's name on a hard refresh. Each node keeps its own last view.
+      function cacheKeyFor(node) {
+        return STORAGE_KEY + (node ? '__' + node : '');
+      }
+
       function loadCachedData() {
         try {
-          const raw = localStorage.getItem(STORAGE_KEY);
+          const raw = localStorage.getItem(cacheKeyFor(activeNode));
           return raw ? JSON.parse(raw) : null;
         } catch (_) {
           return null;
@@ -1991,7 +1997,7 @@
 
       function saveCachedData(data) {
         try {
-          localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+          localStorage.setItem(cacheKeyFor(activeNode), JSON.stringify(data));
         } catch (_) {}
       }
 
@@ -2907,11 +2913,6 @@
 
       nodeEdit.addEventListener('click', renameNode);
       nodeSelect.addEventListener('change', onNodeChange);
-      loadNodes();
-
-      // Initialize App
-      updateRollingHistory(currentData);
-      renderDashboard(currentData);
       setupiOSAppIcons();
       registerInlineServiceWorker();
       try {
@@ -2919,8 +2920,20 @@
       } catch (_) {
         switchTab('live');
       }
-      fetchStatus(false);
-      startPollingLoop();
+
+      // The stored node must be restored before the first fetch, or the page shows one node's
+      // name with another node's services: loadNodes reads the saved selection, so awaiting it
+      // is what keeps the dropdown and the data describing the same machine on a hard refresh.
+      (async () => {
+        await loadNodes();
+        // The node is known only now, so re-read that node's cache; rendering the pre-restore
+        // value here is what showed one machine's services under another's name.
+        currentData = loadCachedData() || SEED_DATA;
+        updateRollingHistory(currentData);
+        renderDashboard(currentData);
+        await fetchStatus(false);
+        startPollingLoop();
+      })();
     })();
   </script>
 </body>
