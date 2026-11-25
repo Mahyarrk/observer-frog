@@ -193,7 +193,9 @@ fn seed_new(conn: &Connection, node_id: &str, row: &Row, ts: i64, observed_at: i
     let st = StoredState {
         state: row.status.clone(),
         fails: 0,
-        ram_mb: 0.0,
+        // Carry what the observation actually measured. This was hardcoded to 0.0, so every
+        // service's memory was discarded on its very first sighting and never recovered.
+        ram_mb: row.ram_mb,
         since_ts: ts,
         name: row.name.clone(),
         group: row.group.clone(),
@@ -236,6 +238,9 @@ fn advance(
     prev.name = row.name.clone();
     prev.group = row.group.clone();
     prev.last_detail = row.detail.clone();
+    // Fresh reading every wave. Without this, `prev` (which is what gets saved) kept its seed
+    // value for ever and every service reported no memory after its first sighting.
+    prev.ram_mb = row.ram_mb;
     // A duplicate observation (a retried report) must not advance the state machine or the
     // rollup either, or the retry would inflate uptime while the raw table looked correct.
     if !record_check(conn, node_id, row, ts, observed_at)? {
@@ -340,7 +345,7 @@ fn sweep_absent(
         let mut ghost_prev = StoredState {
             state: prev.state.clone(),
             fails: prev.fails + 1,
-            ram_mb: 0.0,
+            ram_mb: prev.ram_mb,
             since_ts: prev.since_ts,
             name: prev.name.clone(),
             group: prev.group.clone(),
@@ -572,6 +577,29 @@ mod tests {
         let p = dir.path().join("status.db");
         db::init(&p).unwrap();
         (dir, p)
+    }
+
+    #[test]
+    fn memory_survives_both_the_first_sighting_and_every_wave_after() {
+        // The assertion that was missing while a service's memory was discarded on its first
+        // sighting and again on every wave, so every card read 0.0 in production.
+        let (_d, p) = setup();
+        let mut r = row("svc", "up");
+        r.ram_mb = 42.5;
+        apply_wave(&p, "n", &[r.clone()], Some(1_000)).expect("seed");
+        assert_eq!(
+            load_states(&p, "n").unwrap()["svc"].ram_mb,
+            42.5,
+            "first sighting must keep the measurement"
+        );
+
+        r.ram_mb = 57.25;
+        apply_wave(&p, "n", &[r], Some(1_010)).expect("advance");
+        assert_eq!(
+            load_states(&p, "n").unwrap()["svc"].ram_mb,
+            57.25,
+            "a later wave must refresh it"
+        );
     }
 
     #[test]
