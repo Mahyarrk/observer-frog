@@ -78,7 +78,7 @@ CREATE TABLE IF NOT EXISTS ignored (
 -- v3: a tail registers itself, so the head can name it, know how often it reports, and decide
 -- when its silence means trouble. Without this there is nowhere to keep a node's interval.
 CREATE TABLE IF NOT EXISTS nodes (
-    node_id       TEXT    PRIMARY KEY,
+    node_id       TEXT    PRIMARY KEY,  -- every node this process has heard from
     name          TEXT    NOT NULL DEFAULT '',
     interval_s    INTEGER NOT NULL DEFAULT 30,
     token_sha256  TEXT    NOT NULL DEFAULT '',
@@ -91,6 +91,37 @@ CREATE TABLE IF NOT EXISTS nodes (
     metrics_json  TEXT    NOT NULL DEFAULT ''
 );
 "#;
+
+/// Forget every node except this machine.
+///
+/// A node only aggregates others while it acts as head. Once it stops, the roster it built is dead
+/// weight: the phone's node picker would still offer machines this box no longer tracks, and every
+/// one of their services would sit in the dashboard as permanently unavailable. Called automatically
+/// when the role switches away from head, so the operator never has to clear anything by hand.
+///
+/// The enrolment row survives, only emptied of its observations. Deleting it outright would take
+/// the token digest with it, and a report cannot restore a digest — so flipping back to head would
+/// silently reject a machine that had been paired for months. Blanking `last_seen_ts` is what makes
+/// the node vanish: the roster and the picker are built from nodes that have actually reported.
+pub fn forget_other_nodes(db_path: &Path, keep_node_id: &str) -> Result<usize, String> {
+    let conn = connect(db_path).map_err(|e| e.to_string())?;
+    let mut removed = 0;
+    for sql in [
+        "DELETE FROM service_state WHERE node_id <> ?1",
+        "DELETE FROM service_checks WHERE node_id <> ?1",
+        "DELETE FROM hourly_rollup WHERE node_id <> ?1",
+        "DELETE FROM incidents WHERE node_id <> ?1",
+        "DELETE FROM ignored WHERE node_id <> ?1",
+        "UPDATE nodes SET last_seen_ts = 0, metrics_json = '' WHERE node_id <> ?1",
+    ] {
+        if let Ok(mut stmt) = conn.prepare(sql) {
+            if let Ok(n) = stmt.execute([keep_node_id]) {
+                removed += n;
+            }
+        }
+    }
+    Ok(removed)
+}
 
 pub fn now() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
@@ -326,6 +357,40 @@ pub fn ignored_ids(path: &Path, node_id: &str) -> rusqlite::Result<Vec<String>> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn forgetting_other_nodes_keeps_this_one_and_its_token() {
+        let dir = std::env::temp_dir().join(format!("of-forget-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let db = dir.join("forget.db");
+        let _ = std::fs::remove_file(&db);
+        init(&db).unwrap();
+        let conn = connect(&db).unwrap();
+        conn.execute("INSERT INTO nodes (node_id, token_sha256, last_seen_ts) VALUES ('me', 'aaa', 111)", []).unwrap();
+        conn.execute("INSERT INTO nodes (node_id, token_sha256, last_seen_ts) VALUES ('other', 'bbb', 222)", []).unwrap();
+        conn.execute("INSERT INTO service_state (node_id, service_id) VALUES ('other', 'ssh')", []).unwrap();
+        drop(conn);
+
+        forget_other_nodes(&db, "me").unwrap();
+
+        let conn = connect(&db).unwrap();
+        let seen: i64 = conn.query_row("SELECT last_seen_ts FROM nodes WHERE node_id='me'", [], |r| r.get(0)).unwrap();
+        assert_eq!(seen, 111, "this machine's own data must survive");
+        // The other node keeps its enrolment: a report cannot restore a token digest, so deleting
+        // the row would silently unpair a machine that had been trusted for months.
+        let (other_seen, other_tok): (i64, String) = conn
+            .query_row("SELECT last_seen_ts, token_sha256 FROM nodes WHERE node_id='other'", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(other_seen, 0, "the other node must drop out of the roster");
+        assert_eq!(other_tok, "bbb", "but its token has to survive, or re-pairing breaks");
+        let states: i64 = conn
+            .query_row("SELECT COUNT(*) FROM service_state WHERE node_id='other'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(states, 0, "its observations go with it");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn every_column_survives_the_whole_ladder() {

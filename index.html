@@ -1889,6 +1889,7 @@
             "serve the dashboard" to start reporting.
           </p>
           <button class="settings-btn" id="set-save-role" type="button">Save role</button>
+          <p class="settings-note" id="set-role-note"></p>
         </div>
 
         <div class="settings-card">
@@ -1966,6 +1967,7 @@
             <input type="number" id="set-interval" min="1" max="3600" />
           </label>
           <button class="settings-btn" id="set-save-interval" type="button">Save interval</button>
+          <p class="settings-note" id="set-interval-note"></p>
         </div>
 
         <div class="settings-card">
@@ -2065,7 +2067,7 @@
       const API_BASE = (window.location.pathname.replace(/\/$/, '') || '');
       // Bump on every shell change. Declared before first use: a `const` referenced above its
       // declaration throws a TDZ error and takes the whole script down (it did).
-      const BUILD = 'of-14';
+      const BUILD = 'of-16';
       // Show the address actually in use, not a baked-in host.
       (function () {
         const el = document.getElementById('brand-url');
@@ -2857,8 +2859,10 @@
       const elViewSettings = document.getElementById('view-settings');
       const elTabSettings = document.getElementById('tab-btn-settings');
 
-      function settingsNote(msg) {
-        const el = document.getElementById('set-autostart-note');
+      function settingsNote(msg, target) {
+        // One note per card: writing every message into the autostart note made "role saved" look
+        // like silence, because it appeared under a different heading than the button pressed.
+        const el = document.getElementById(target || 'set-role-note');
         if (el) el.textContent = msg || '';
       }
 
@@ -3124,17 +3128,21 @@
         } catch (_) {}
       }
 
-      async function saveSettings(body, okMsg) {
+      async function saveSettings(body, okMsg, noteTarget) {
+        const note = (m) => settingsNote(m, noteTarget);
         try {
+          note('saving…');
           const r = await fetch('api/settings', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body),
           });
           const d = await r.json();
-          if (!d.ok) { settingsNote(d.error || 'save failed'); return; }
-          settingsNote(okMsg + ' — live now');
+          if (!d.ok) { note(d.error || 'save failed'); return; }
+          note(okMsg + ' — live now');
           await loadSettings();
+          // The role decides whether the node bar means anything, so re-read it after a change.
+          if (typeof loadNodes === 'function') await loadNodes();
         } catch (e) { settingsNote('save failed: ' + e); }
       }
 
@@ -3146,10 +3154,10 @@
         on('set-save-role', () => saveSettings({
           listen: document.getElementById('set-serve').checked,
           report_to: document.getElementById('set-report-to').value.trim(),
-        }, 'role saved'));
+        }, 'role saved', 'set-role-note'));
         on('set-save-interval', () => {
           const v = parseInt(document.getElementById('set-interval').value, 10) || 30;
-          saveSettings({ poll_interval: v }, 'interval saved');
+          saveSettings({ poll_interval: v }, 'interval saved', 'set-interval-note');
         });
         on('set-autostart', async () => {
           const want = document.getElementById('set-autostart').checked;
@@ -3165,8 +3173,8 @@
               await loadSettings();
               return;
             }
-            settingsNote(d.detail || (want ? 'autostart on' : 'autostart off'));
-          } catch (e) { settingsNote('could not change autostart: ' + e); }
+            settingsNote(d.detail || (want ? 'autostart on' : 'autostart off'), 'set-autostart-note');
+          } catch (e) { settingsNote('could not change autostart: ' + e, 'set-autostart-note'); }
         });
         on('set-add-open', async () => {
           const panel = document.getElementById('set-add-panel');

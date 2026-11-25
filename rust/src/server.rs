@@ -335,7 +335,11 @@ pub fn nodes_list(app: &App) -> Value {
     }));
     if let Ok(conn) = db::connect(&app.cfg.db_path) {
         if let Ok(mut stmt) = conn.prepare(
-            "SELECT node_id, name, interval_s, last_seen_ts, reported_name, display_name FROM nodes ORDER BY node_id",
+            // A row with no `last_seen_ts` is a machine this node has stopped hearing from, either
+            // because it went quiet long ago or because the role changed away from head and its
+            // observations were cleared. Either way it is not part of the roster any more.
+            "SELECT node_id, name, interval_s, last_seen_ts, reported_name, display_name \
+             FROM nodes WHERE last_seen_ts > 0 ORDER BY node_id",
         ) {
             if let Ok(rows) = stmt.query_map([], |r| {
                 Ok((

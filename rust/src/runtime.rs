@@ -208,6 +208,11 @@ pub fn run(cfg: Config, config_path: Option<PathBuf>, tls: Option<(PathBuf, Path
             // Sweep four times per shortest interval, floored at 5s, so detection lands within
             // the grace window rather than a whole interval late.
             let tick: f64 = 5.0;
+            // Whether the roster may still hold other machines, so it is cleared exactly once
+            // after the switch rather than on every tick. Starts true even for a node that boots
+            // as a tail: it may have been a head before the last restart, and those rows are still
+            // on disk waiting to clutter the node picker.
+            let was_head = std::sync::atomic::AtomicBool::new(true);
             while !halt.load(Ordering::SeqCst) {
                 // Acting as head is a setting, not an identity: read it every tick so the checkbox
                 // takes effect within five seconds, with no restart and no unit rewrite.
@@ -215,6 +220,20 @@ pub fn run(cfg: Config, config_path: Option<PathBuf>, tls: Option<(PathBuf, Path
                     Some(w) => w.refresh().serve,
                     None => app.cfg.serve,
                 };
+                // On the tick where this node stops acting as head, drop what it learned about
+                // other machines. Doing it on the transition rather than every tick keeps a quiet
+                // node cheap, and means the roster is cleared the moment the switch is flipped.
+                if !acting_head && was_head.swap(false, Ordering::SeqCst) {
+                    match crate::db::forget_other_nodes(&app.cfg.db_path, &app.cfg.node_id) {
+                        Ok(n) if n > 0 => log_line(&format!(
+                            "stopped acting as head: cleared {n} rows for other machines"
+                        )),
+                        Ok(_) => {}
+                        Err(e) => log_line(&format!("could not clear the node roster: {e}")),
+                    }
+                } else if acting_head {
+                    was_head.store(true, Ordering::SeqCst);
+                }
                 if !acting_head {
                     let mut left = tick;
                     while left > 0.0 && !halt.load(Ordering::SeqCst) {
