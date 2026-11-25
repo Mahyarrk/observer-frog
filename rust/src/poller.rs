@@ -58,6 +58,23 @@ impl Snapshot {
                 rss_mb: (rss * 10.0).round() / 10.0,
             });
         }
+        // sysinfo cannot read the memory of another user's process without elevation, so a service
+        // running as root (wireguard-go, nginx) would report "—" on a machine that plainly has the
+        // number. One `ps` for the whole wave fills those in: `ps` may read RSS here, and paying for
+        // it only when something is unreadable keeps the normal case at one scan.
+        if rows.iter().any(|r| r.rss_mb <= 0.0) {
+            if let Ok(out) = std::process::Command::new("ps").args(["-Ao", "pid=,rss="]).output() {
+                let table = String::from_utf8_lossy(&out.stdout);
+                for line in table.lines() {
+                    let mut it = line.split_whitespace();
+                    let (Some(p), Some(kb)) = (it.next(), it.next()) else { continue };
+                    let (Ok(pid), Ok(kb)) = (p.parse::<u32>(), kb.parse::<f64>()) else { continue };
+                    if let Some(row) = rows.iter_mut().find(|r| r.pid == pid && r.rss_mb <= 0.0) {
+                        row.rss_mb = ((kb / 1024.0) * 10.0).round() / 10.0;
+                    }
+                }
+            }
+        }
         Self { rows, ok: true, excluded }
     }
 
