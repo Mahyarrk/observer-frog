@@ -103,6 +103,11 @@ impl Snapshot {
             return None;
         }
         let matched: Vec<&Proc> = self.rows.iter().filter(|r| r.cmd_lower.contains(&needle)).collect();
+        if std::env::var("OF_DEBUG_RAM").is_ok() {
+            for m in &matched {
+                eprintln!("ram-debug: needle={needle:?} pid={} rss={} cmd={}", m.pid, m.rss_mb, m.cmd);
+            }
+        }
         if matched.is_empty() {
             return None;
         }
