@@ -200,6 +200,17 @@ pub fn add_service(path: &Path, block: &str, id: &str) -> Result<(), String> {
     if service_ids_in(&text).iter().any(|x| x == id) {
         return Err(format!("a service with id {id:?} already exists"));
     }
+    // An id is what the code keys on; a display name is what the operator reads. Adding the
+    // catalog's `hermes` to a dashboard already watching `hermes_api` gave two cards both labelled
+    // "Hermes Agent", which is indistinguishable on screen. Refuse by name too, and say which id
+    // already holds it so the answer is actionable rather than just "no".
+    if let Some(name) = block_field(block, "name") {
+        if let Some(existing) = service_with_name(&text, &name) {
+            return Err(format!(
+                "a service already shows as {name:?} (id {existing:?}); rename it or remove that one first"
+            ));
+        }
+    }
     let mut out = text.clone();
     if !out.is_empty() && !out.ends_with('\n') {
         out.push('\n');
@@ -257,6 +268,28 @@ pub fn remove_service(path: &Path, id: &str) -> Result<(), String> {
         return write(path, &out);
     }
     Err(format!("no such service {id:?}"))
+}
+
+/// Read one `key = "value"` from a config block.
+fn block_field(block: &str, key: &str) -> Option<String> {
+    block.lines().find_map(|l| {
+        let t = l.trim();
+        t.strip_prefix(key)
+            .and_then(|r| r.trim_start().strip_prefix('='))
+            .map(|v| v.trim().trim_matches('"').to_string())
+            .filter(|v| !v.is_empty())
+    })
+}
+
+/// The id of the existing service whose display name matches, if any.
+pub fn service_with_name(text: &str, name: &str) -> Option<String> {
+    let name = name.trim().to_lowercase();
+    for block in text.split("[[service]]").skip(1) {
+        if block_field(block, "name").map(|n| n.to_lowercase()) == Some(name.clone()) {
+            return block_field(block, "id");
+        }
+    }
+    None
 }
 
 /// Every `id` in a `[[service]]` block, so a duplicate can be refused before it breaks the config.
@@ -329,6 +362,19 @@ mod tests {
         let after = std::fs::read_to_string(&p).unwrap();
         assert_eq!(service_ids_in(&after), vec!["keepme"], "wrong block removed: {after}");
         assert!(after.contains("[node]"), "removal ate the node table: {after}");
+    }
+
+    #[test]
+    fn a_duplicate_display_name_is_refused() {
+        // Two cards both labelled "Hermes Agent" are indistinguishable on screen even though their
+        // ids differ, so a name collision is refused the same way an id collision is.
+        let body = "[[service]]\nid = \"hermes_api\"\nname = \"Hermes Agent\"\nprobe = \"http\"\ntarget = \"http://127.0.0.1:9119/\"\n";
+        let (_d, p) = tmpfile(body);
+        let block = "[[service]]\nid = \"hermes\"\nname = \"Hermes Agent\"\nprobe = \"http\"\ntarget = \"http://127.0.0.1:9119/\"";
+        let err = add_service(&p, block, "hermes").unwrap_err();
+        assert!(err.contains("hermes_api"), "the error must name the id already using it: {err}");
+        // And nothing was appended.
+        assert_eq!(service_ids_in(&std::fs::read_to_string(&p).unwrap()), vec!["hermes_api"]);
     }
 
     #[test]
