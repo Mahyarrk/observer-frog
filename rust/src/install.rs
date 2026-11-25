@@ -205,22 +205,42 @@ pub fn install(cfg: &config::Config, config_path: Option<&Path>) -> i32 {
         }
     }
 
-    // Tell the init system about the file we just wrote. Without this, a re-install leaves systemd
-    // running the previous definition and printing "unit changed on disk" on the next restart —
-    // a warning the user did nothing to cause and cannot act on.
-    if cfg!(target_os = "linux") {
+    // Activate what was just written. Writing a unit is not installing it: without `enable` the
+    // Linux unit never runs at boot, and without `load -w` the Mac plist sits in LaunchAgents
+    // doing nothing. Both are cheap and idempotent.
+    let activation = if cfg!(target_os = "macos") {
+        std::process::Command::new("launchctl")
+            .arg("load")
+            .arg("-w")
+            .arg(&unit)
+            .output()
+    } else {
+        // Reload first so systemd sees the file, then enable and start it. Skipping the reload is
+        // what made a re-install print "unit changed on disk" on the next restart — a warning the
+        // user did nothing to cause and cannot act on.
         let _ = std::process::Command::new("systemctl")
             .args(["--user", "daemon-reload"])
             .output();
-    }
+        let name = unit.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();
+        std::process::Command::new("systemctl")
+            .args(["--user", "enable", "--now", &name])
+            .output()
+    };
+    let activated = activation.map(|o| o.status.success()).unwrap_or(false);
 
     println!("installed as {} ({role})", unit.display());
     println!("  binary {}", binary.display());
     println!("  config {}", config_path.display());
     if cfg!(target_os = "macos") {
-        println!("  start it now with: launchctl load -w {}", unit.display());
+        println!(
+            "  {}",
+            if activated { "loaded and set to start at login" } else { "written; loading it failed, run: launchctl load -w <the path above>" }
+        );
     } else {
-        println!("  start it now with: systemctl --user daemon-reload && systemctl --user enable --now {}", unit.file_name().and_then(|n| n.to_str()).unwrap_or("observer-frog"));
+        println!(
+            "  {}",
+            if activated { "enabled and started" } else { "written; enabling it failed, run: systemctl --user enable --now <the path above>" }
+        );
         println!("  to start at boot without logging in: loginctl enable-linger $USER");
     }
     println!("  autostart is on; `uninstall` removes it");
