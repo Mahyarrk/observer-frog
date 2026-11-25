@@ -136,32 +136,67 @@ fn listening_from_proc() -> Vec<Listener> {
 /// marks those as unsigned.
 pub fn discover(entries: &[Entry], host: &str) -> Vec<Service> {
     let listeners = listening();
-    let ports: BTreeSet<u16> = listeners.iter().map(|l| l.port).collect();
+    let mut found: Vec<Service> = Vec::new();
 
-    let mut found = Vec::new();
-    for entry in entries {
-        if entry.probe == "process" || entry.probe == "file_age" || entry.probe == "file_json" {
-            continue; // no port to match on
+    // Pass 1: HTTP entries, matched by signature on ANY listening port.
+    //
+    // Checking only the catalog's default port misses every service that runs elsewhere — a
+    // SearXNG on :8888 looks absent when the catalog says :8080. A signature hit is far stronger
+    // evidence than a port match, so port is only a hint about where to look.
+    for entry in entries.iter().filter(|e| e.probe == "http" && e.has_signature()) {
+        // The default port first: it is the common case and costs one request.
+        let mut candidates: Vec<u16> = Vec::new();
+        if entry.default_port > 0 && listeners.iter().any(|l| l.port == entry.default_port) {
+            candidates.push(entry.default_port);
         }
-        if entry.default_port == 0 || !ports.contains(&entry.default_port) {
-            continue;
+        for l in &listeners {
+            if !candidates.contains(&l.port) {
+                candidates.push(l.port);
+            }
         }
-        let Ok(svc) = crate::catalog::instantiate(entry, host, None, "") else { continue };
 
-        // A port match alone is weak evidence. Verify when the entry offers a signature.
-        if entry.probe == "http" && entry.has_signature() {
+        for port in candidates {
+            // A loopback service is still reachable at the loopback address; a wildcard listener
+            // answers on either. Use the host the caller gave.
+            let Ok(svc) = crate::catalog::instantiate(entry, host, Some(port), "") else { continue };
             let (state, _, _) = crate::probes::probe_http(
                 &svc.target,
                 svc.expect_status,
                 &svc.contains,
-                svc.timeout,
+                svc.timeout.min(1.5),
             );
-            if state != crate::probes::STATE_UP {
-                continue; // something else is on that port
+            if state == crate::probes::STATE_UP {
+                found.push(svc);
+                break;
             }
         }
-        found.push(svc);
     }
+
+    // Pass 2: TCP entries, matched on port only. A bare TCP check has no signature, so this can
+    // only ever confirm "something accepts connections here".
+    for entry in entries.iter().filter(|e| e.probe == "tcp") {
+        if entry.default_port == 0 || !listeners.iter().any(|l| l.port == entry.default_port) {
+            continue;
+        }
+        if let Ok(svc) = crate::catalog::instantiate(entry, host, None, "") {
+            found.push(svc);
+        }
+    }
+
+    // Pass 3: process probes. Nothing to match on a socket table; ask the process table, which
+    // is what a service with no port (a proxy core, an agent) actually looks like.
+    for entry in entries.iter().filter(|e| e.probe == "process") {
+        if entry.process_match.is_empty() {
+            continue;
+        }
+        if let Ok(svc) = crate::catalog::instantiate(entry, host, None, "") {
+            let (state, _, _) = crate::probes::probe_process(&svc.target);
+            if state == crate::probes::STATE_UP {
+                found.push(svc);
+            }
+        }
+    }
+
     found.sort_by(|a, b| a.group.cmp(&b.group).then_with(|| a.name.cmp(&b.name)));
     found
 }

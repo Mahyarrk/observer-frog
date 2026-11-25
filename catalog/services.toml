@@ -92,6 +92,15 @@ verify_contains = ""
 notes = "Admin UI. 401 on the API is healthy too."
 
 [[catalog]]
+id = "vocechat"
+name = "VoceChat"
+group = "Chat"
+probe = "http"
+default_port = 3009
+verify_path = "/"
+verify_contains = "VoceChat"
+
+[[catalog]]
 id = "xray"
 name = "Xray"
 group = "Proxy"
