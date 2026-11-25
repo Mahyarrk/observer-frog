@@ -389,28 +389,18 @@ fn cmd_serve(cfg: &config::Config, args: &[String], config_path: Option<PathBuf>
             cfg.bind
         );
     }
-    // One binary, both roles. `serve = false` with a `report_to` means this process is a tail: it
-    // probes and reports, and binds nothing. That is the switchable behaviour the version is for.
-    if !cfg.serve {
-        match cfg.report_to.clone() {
-            Some(head) => {
-                let token = match cfg.token() {
-                    Ok(t) => t,
-                    Err(e) => {
-                        eprintln!("cannot run as a tail: {e}");
-                        return 2;
-                    }
-                };
-                observer_frog::runtime::init_logging(verbose);
-                let halt = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-                let opts = observer_frog::tail::TailOptions { report_to: head, token };
-                return observer_frog::tail::run(cfg, opts, halt);
-            }
-            None => {
-                eprintln!("serve = false and no report_to: this node has nothing to do.");
-                eprintln!("Set report_to to run as a tail, or serve = true to run as a head.");
-                return 2;
-            }
+    // One binary, both roles, one runtime. A node always binds its own port — so a tail has its
+    // own settings page on its own IP — and reports upstream when `report_to` is set. The only
+    // thing `serve` decides is whether this node also sweeps other nodes for silence.
+    if !cfg.serve && cfg.report_to.is_none() {
+        eprintln!("serve = false and no report_to: this node has nothing to do.");
+        eprintln!("Set report_to to run as a tail, or serve = true to run as a head.");
+        return 2;
+    }
+    if cfg.report_to.is_some() {
+        if let Err(e) = cfg.token() {
+            eprintln!("cannot report: {e}");
+            return 2;
         }
     }
 

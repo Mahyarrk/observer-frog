@@ -253,12 +253,15 @@ pub fn is_installed(cfg: &config::Config) -> bool {
     unit_path(&role_of(cfg)).map(|p| p.exists()).unwrap_or(false)
 }
 
-/// Turn the installed unit on or off without rewriting it.
+/// Turn autostart on or off **without killing a running node**.
 ///
-/// This is what the admin GUI's autostart switch calls: `install` and `uninstall` create and
-/// remove the unit and are CLI-only, but flipping it is a switch and belongs in the browser.
+/// Autostart means "start at boot", not "run now". Using `launchctl unload` or
+/// `systemctl disable --now` here would kill the very process answering this request, so the
+/// switch could never report success — and turning autostart off should not stop a dashboard
+/// that is currently serving.
 pub fn set_enabled(cfg: &config::Config, on: bool) -> Result<String, String> {
-    let unit = unit_path(&role_of(cfg))?;
+    let role = role_of(cfg);
+    let unit = unit_path(&role)?;
     if !unit.exists() {
         return Err(format!(
             "not installed ({}) — run `observer-frog install` once from a shell",
@@ -266,21 +269,55 @@ pub fn set_enabled(cfg: &config::Config, on: bool) -> Result<String, String> {
         ));
     }
     let out = if cfg!(target_os = "macos") {
-        std::process::Command::new("launchctl")
-            .args([if on { "load" } else { "unload" }, "-w"])
-            .arg(&unit)
+        let uid = std::process::Command::new("id")
+            .arg("-u")
             .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_string())
+            .unwrap_or_else(|| "501".into());
+        let target = format!("gui/{uid}/dev.observerfrog.{role}");
+        // disable/enable only affect what happens at login; a running job is left alone.
+        let o = std::process::Command::new("launchctl")
+            .args([if on { "enable" } else { "disable" }, &target])
+            .output();
+        if on {
+            // Enabling something that is not running should actually start it.
+            if !is_running(&role) {
+                let _ = std::process::Command::new("launchctl").arg("load").arg("-w").arg(&unit).output();
+            }
+        }
+        o
     } else {
         let name = unit.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();
-        std::process::Command::new("systemctl")
-            .args(["--user", if on { "enable" } else { "disable" }, "--now", &name])
-            .output()
+        if on {
+            std::process::Command::new("systemctl")
+                .args(["--user", "enable", "--now", &name])
+                .output()
+        } else {
+            // No --now: it stops starting at boot, and the current run continues.
+            std::process::Command::new("systemctl")
+                .args(["--user", "disable", &name])
+                .output()
+        }
     };
     match out {
         Ok(o) if o.status.success() => Ok(format!("autostart {}", if on { "on" } else { "off" })),
         Ok(o) => Err(String::from_utf8_lossy(&o.stderr).trim().to_string()),
         Err(e) => Err(format!("cannot run the platform service tool: {e}")),
     }
+}
+
+/// Whether the unit is currently running, so `enable` can start a stopped node.
+fn is_running(role: &str) -> bool {
+    let label = format!("dev.observerfrog.{role}");
+    std::process::Command::new("launchctl")
+        .arg("list")
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.contains(&label))
+        .unwrap_or(false)
 }
 
 #[cfg(test)]

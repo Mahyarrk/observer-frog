@@ -194,7 +194,8 @@ pub fn run(cfg: Config, config_path: Option<PathBuf>, tls: Option<(PathBuf, Path
     }
 
     // Silence sweeper: its own clock, because it must run even on a head that probes nothing.
-    {
+    // A tail has no remote nodes to watch, so it never sweeps.
+    if cfg.serve {
         let app = Arc::clone(&app);
         let halt = Arc::clone(&sweeper_halt);
         std::thread::spawn(move || {
