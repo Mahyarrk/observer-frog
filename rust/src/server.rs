@@ -885,8 +885,7 @@ fn route(req: &Request, app: &Arc<App>) -> (u16, String, Vec<u8>, bool) {
                 .get("x-forwarded-for")
                 .cloned()
                 .unwrap_or_else(|| "lan".to_string());
-            let path = crate::settings::target(&app.cfg);
-            match crate::pair::request(&path, node_id, name, token, &from, interval) {
+            match crate::pair::request(&app.cfg.db_path, node_id, name, token, &from, interval) {
                 Ok(_) => (200, json_ct, json_bytes(&json!({
                     "ok": true,
                     "pending": true,
@@ -898,13 +897,17 @@ fn route(req: &Request, app: &Arc<App>) -> (u16, String, Vec<u8>, bool) {
         ("GET" | "HEAD", _) if normalized == "/api/pair" => {
             // Reading a pairing request only makes sense on a machine acting as head: a tail has
             // nothing to approve, and saying so beats an empty list that looks like no requests.
-            if !app.cfg.serve {
+            // Read from disk, not from boot: the role is a switch the operator flips while this
+            // process keeps running, and a head gate that only knows what it started as would
+            // refuse to list requests minutes after being made a head.
+            let live = crate::config::load(Some(&crate::settings::target(&app.cfg)))
+                .unwrap_or_else(|_| app.cfg.clone());
+            if !live.serve {
                 return (200, json_ct, json_bytes(&json!({
                     "ok": true, "requests": [], "note": "this node is not acting as head",
                 })), false);
             }
-            let path = crate::settings::target(&app.cfg);
-            let rows = crate::pair::pending(&path);
+            let rows = crate::pair::pending(&app.cfg.db_path);
             (200, json_ct, json_bytes(&json!({"ok": true, "requests": rows})), false)
         }
         ("POST", _) if normalized == "/api/pair/decide" => {
@@ -914,11 +917,10 @@ fn route(req: &Request, app: &Arc<App>) -> (u16, String, Vec<u8>, bool) {
             let b: Value = serde_json::from_slice(&req.body).unwrap_or(json!({}));
             let id = b.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
             let approve = b.get("approve").and_then(|v| v.as_bool()).unwrap_or(false);
-            let path = crate::settings::target(&app.cfg);
             let res = if approve {
-                crate::pair::approve(&path, id)
+                crate::pair::approve(&app.cfg.db_path, id)
             } else {
-                crate::pair::reject(&path, id)
+                crate::pair::reject(&app.cfg.db_path, id)
             };
             match res {
                 Ok(msg) => (200, json_ct, json_bytes(&json!({"ok": true, "detail": msg})), false),
