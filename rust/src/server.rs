@@ -19,7 +19,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const MIN_FORCED_POLL_S: f64 = 2.0;
 pub const HISTORY_POINTS: usize = 7;
-pub const MAX_BODY: usize = 8192;
+pub const MAX_BODY: usize = 8192;      // /api/ignore: a small control message
+pub const REPORT_MAX_BODY: usize = 65536;  // /api/report: a full node report
+/// Hard cap on what the reader will pull off the socket, so a hostile Content-Length cannot
+/// make the process allocate. Slightly above the largest legal body so the route can answer 413.
+const READ_CAP: usize = REPORT_MAX_BODY + 1;
 
 fn now() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
@@ -308,7 +312,11 @@ struct Request {
     method: String,
     path: String,
     query: HashMap<String, String>,
+    headers: HashMap<String, String>,
     body: Vec<u8>,
+    /// Declared Content-Length. Zero when absent. Lets a route answer 413 instead of parsing a
+    /// body the reader refused to pull.
+    declared_len: usize,
 }
 
 fn handle<S: Read + Write>(mut stream: S, app: Arc<App>) {
@@ -342,8 +350,10 @@ fn handle<S: Read + Write>(mut stream: S, app: Arc<App>) {
             .get("content-length")
             .and_then(|v| v.parse().ok())
             .unwrap_or(0);
-        let mut body = vec![0u8; length.min(MAX_BODY * 4)];
-        if length > 0 && length <= body.len() {
+        // Over READ_CAP we deliberately do not read: the route answers 413 from declared_len.
+        let mut body = Vec::new();
+        if length > 0 && length <= READ_CAP {
+            body = vec![0u8; length];
             let _ = reader.read_exact(&mut body);
         }
 
@@ -364,7 +374,7 @@ fn handle<S: Read + Write>(mut stream: S, app: Arc<App>) {
             })
             .collect();
 
-        Request { method, path, query, body }
+        Request { method, path, query, headers, body, declared_len: length }
     };
 
     let (code, ctype, payload, cors) = route(&req, &app);
@@ -448,6 +458,10 @@ fn route(req: &Request, app: &Arc<App>) -> (u16, String, Vec<u8>, bool) {
         }
         ("GET" | "HEAD", p) if p == "/api/health" || p == "/status/api/health" => {
             (200, json_ct, json_bytes(&json!({"ok": true, "uptime_s": now() - app.started_ts})), false)
+        }
+        ("POST", _) if normalized == "/api/report" => {
+            let (code, payload) = crate::ingest::handle_report(app, &req.headers, &req.body, req.declared_len);
+            (code, json_ct, json_bytes(&payload), false)
         }
         ("POST", _) if normalized == "/api/ignore" => {
             if req.body.len() > MAX_BODY {

@@ -127,13 +127,27 @@ fn close_incident(conn: &Connection, node_id: &str, service_id: &str, ts: i64, d
     Ok(())
 }
 
-fn record_check(conn: &Connection, node_id: &str, row: &Row, ts: i64) -> rusqlite::Result<()> {
-    conn.execute(
-        "INSERT INTO service_checks (node_id, service_id, timestamp, status, detail, latency_ms) \
-         VALUES (?,?,?,?,?,?)",
-        (node_id, &row.service_id, ts, &row.status, &row.detail, row.latency_ms),
+/// Record one check.
+///
+/// `ts` is the head's arrival stamp (what buckets and incidents use); `observed_at` is the tail's
+/// own clock and is the idempotency key. A retried report carries the same `observed_at`, so the
+/// unique index turns the retry into a no-op; two genuinely different observations a second apart
+/// carry different values and both land. With the arrival stamp as the key, every retry would
+/// duplicate.
+fn record_check(
+    conn: &Connection,
+    node_id: &str,
+    row: &Row,
+    ts: i64,
+    observed_at: i64,
+) -> rusqlite::Result<bool> {
+    let changed = conn.execute(
+        "INSERT OR IGNORE INTO service_checks \
+           (node_id, service_id, timestamp, status, detail, latency_ms, observed_at) \
+         VALUES (?,?,?,?,?,?,?)",
+        (node_id, &row.service_id, ts, &row.status, &row.detail, row.latency_ms, observed_at),
     )?;
-    Ok(())
+    Ok(changed > 0)
 }
 
 fn record_rollup(conn: &Connection, node_id: &str, row: &Row, ts: i64) -> rusqlite::Result<()> {
@@ -164,7 +178,7 @@ fn record_rollup(conn: &Connection, node_id: &str, row: &Row, ts: i64) -> rusqli
 }
 
 /// I4 — a first sighting seeds silently, whatever state it arrives in.
-fn seed_new(conn: &Connection, node_id: &str, row: &Row, ts: i64, ignored: &HashSet<String>) -> rusqlite::Result<Change> {
+fn seed_new(conn: &Connection, node_id: &str, row: &Row, ts: i64, observed_at: i64, ignored: &HashSet<String>) -> rusqlite::Result<Change> {
     let st = StoredState {
         state: row.status.clone(),
         fails: 0,
@@ -174,8 +188,10 @@ fn seed_new(conn: &Connection, node_id: &str, row: &Row, ts: i64, ignored: &Hash
         last_detail: row.detail.clone(),
     };
     save_state(conn, node_id, &row.service_id, &st)?;
-    record_check(conn, node_id, row, ts)?;
-    record_rollup(conn, node_id, row, ts)?;
+    let fresh = record_check(conn, node_id, row, ts, observed_at)?;
+    if fresh {
+        record_rollup(conn, node_id, row, ts)?;
+    }
     if row.status == "down" {
         open_incident(conn, node_id, row, ts)?;
     }
@@ -200,12 +216,17 @@ fn advance(
     row: &Row,
     prev: &mut StoredState,
     ts: i64,
+    observed_at: i64,
     ignored: &HashSet<String>,
 ) -> rusqlite::Result<Option<Change>> {
     prev.name = row.name.clone();
     prev.group = row.group.clone();
     prev.last_detail = row.detail.clone();
-    record_check(conn, node_id, row, ts)?;
+    // A duplicate observation (a retried report) must not advance the state machine or the
+    // rollup either, or the retry would inflate uptime while the raw table looked correct.
+    if !record_check(conn, node_id, row, ts, observed_at)? {
+        return Ok(None);
+    }
     record_rollup(conn, node_id, row, ts)?;
     let flagged = ignored.contains(&row.service_id);
 
@@ -318,7 +339,20 @@ fn sweep_absent(
 ///
 /// An empty `rows` is a broken poll (I3): nothing is marked down and nothing is persisted.
 pub fn apply_wave(path: &Path, node_id: &str, rows: &[Row], ts: Option<i64>) -> rusqlite::Result<Vec<Change>> {
+    apply_wave_observed(path, node_id, rows, ts, None)
+}
+
+/// As `apply_wave`, but with the tail's own observation stamp used as the idempotency key.
+pub fn apply_wave_observed(
+    path: &Path,
+    node_id: &str,
+    rows: &[Row],
+    ts: Option<i64>,
+    observed_at: Option<i64>,
+) -> rusqlite::Result<Vec<Change>> {
     let ts = ts.unwrap_or_else(db::now);
+    // A local head observes at the moment it records, so absent a tail stamp the two coincide.
+    let observed_at = observed_at.unwrap_or(ts);
 
     if rows.is_empty() {
         log_empty_payload();
@@ -335,9 +369,9 @@ pub fn apply_wave(path: &Path, node_id: &str, rows: &[Row], ts: Option<i64>) -> 
     for row in rows {
         seen.insert(row.service_id.clone());
         match states.get_mut(&row.service_id) {
-            None => changes.push(seed_new(&conn, node_id, row, ts, &ignored)?),
+            None => changes.push(seed_new(&conn, node_id, row, ts, observed_at, &ignored)?),
             Some(prev) => {
-                if let Some(c) = advance(&conn, node_id, row, prev, ts, &ignored)? {
+                if let Some(c) = advance(&conn, node_id, row, prev, ts, observed_at, &ignored)? {
                     changes.push(c);
                 }
             }

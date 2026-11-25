@@ -51,6 +51,7 @@ fn run(args: &[String]) -> i32 {
         Some("catalog") => cmd_catalog(&entries, args.get(positional_after(args, "catalog")).map(|s| s.as_str())),
         Some("add") => cmd_add(&cfg, &entries, args),
         Some("metrics") => cmd_metrics(&cfg),
+        Some("enrol") => cmd_enrol(&cfg, args),
         Some("serve") | None => cmd_serve(&cfg, args, config_path),
         Some("status") => cmd_status(&cfg),
         Some(other) => {
@@ -77,6 +78,7 @@ commands:
   catalog    list services that ship with a ready-made definition
   add        print the config block for a catalog service
   metrics    print this machine's status line (no server)
+  enrol      register a node and its token (token from env, never the config)
   serve      start the dashboard (the default when no command is given)
 
 serve options:
@@ -187,6 +189,52 @@ fn cmd_add(cfg: &config::Config, entries: &[catalog::Entry], args: &[String]) ->
     );
     println!("{}", catalog::to_toml(&svc));
     0
+}
+
+/// Register a node and its token. The token is read from the named environment variable so it
+/// never appears in shell history or in the config file.
+fn cmd_enrol(cfg: &config::Config, args: &[String]) -> i32 {
+    let idx = positional_after(args, "enrol");
+    let node = match args.get(idx) {
+        Some(n) if !n.starts_with('-') => n.clone(),
+        _ => {
+            eprintln!("usage: observer-frog enrol <node-id> --token-env VAR [--name NAME] [--interval S]");
+            return 2;
+        }
+    };
+    let var = match flag(args, "--token-env") {
+        Some(v) => v,
+        None => {
+            eprintln!("--token-env is required: the token is read from the environment, never the config file");
+            return 2;
+        }
+    };
+    let token = match std::env::var(var) {
+        Ok(t) if !t.trim().is_empty() => t.trim().to_string(),
+        _ => {
+            eprintln!("environment variable {var} is unset or empty");
+            return 2;
+        }
+    };
+    let name = flag(args, "--name").unwrap_or(&node);
+    let interval: i64 = flag(args, "--interval").and_then(|v| v.parse().ok()).unwrap_or(cfg.poll_interval as i64);
+    if let Err(e) = db::init(&cfg.db_path) {
+        eprintln!("cannot open database {}: {e}", cfg.db_path.display());
+        return 1;
+    }
+    match observer_frog::ingest::touch_node(
+        &cfg.db_path, &node, name, interval, &observer_frog::ingest::token_digest(&token), db::now(),
+    ) {
+        Ok(()) => {
+            println!("enrolled {node} (name {name:?}, interval {interval}s)");
+            println!("token digest stored; the token itself was not saved");
+            0
+        }
+        Err(e) => {
+            eprintln!("cannot enrol {node}: {e}");
+            1
+        }
+    }
 }
 
 fn cmd_metrics(cfg: &config::Config) -> i32 {

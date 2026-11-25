@@ -8,7 +8,7 @@ use rusqlite::{Connection, OpenFlags};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 3;
 pub const RAW_RETENTION_S: i64 = 86_400; // 24 h of per-check rows
 pub const ROLLUP_RETENTION_S: i64 = 2_592_000; // 30 days of hourly counters
 
@@ -21,10 +21,11 @@ CREATE TABLE IF NOT EXISTS schema_version (
 CREATE TABLE IF NOT EXISTS service_checks (
     node_id    TEXT    NOT NULL,
     service_id TEXT    NOT NULL,
-    timestamp  INTEGER NOT NULL,
+    timestamp  INTEGER NOT NULL,          -- head arrival: buckets and incidents use this
     status     TEXT    NOT NULL,
     detail     TEXT    NOT NULL,
-    latency_ms INTEGER NOT NULL
+    latency_ms INTEGER NOT NULL,
+    observed_at INTEGER NOT NULL DEFAULT 0 -- tail's own clock: the idempotency key
 );
 CREATE INDEX IF NOT EXISTS idx_checks_node_time ON service_checks (node_id, service_id, timestamp);
 
@@ -70,6 +71,17 @@ CREATE TABLE IF NOT EXISTS ignored (
     service_id TEXT NOT NULL,
     PRIMARY KEY (node_id, service_id)
 );
+
+-- v3: a tail registers itself, so the head can name it, know how often it reports, and decide
+-- when its silence means trouble. Without this there is nowhere to keep a node's interval.
+CREATE TABLE IF NOT EXISTS nodes (
+    node_id       TEXT    PRIMARY KEY,
+    name          TEXT    NOT NULL DEFAULT '',
+    interval_s    INTEGER NOT NULL DEFAULT 30,
+    token_sha256  TEXT    NOT NULL DEFAULT '',
+    first_seen_ts INTEGER NOT NULL DEFAULT 0,
+    last_seen_ts  INTEGER NOT NULL DEFAULT 0
+);
 "#;
 
 pub fn now() -> i64 {
@@ -103,6 +115,10 @@ pub fn init(path: &Path) -> rusqlite::Result<i64> {
                 "INSERT INTO schema_version (version, applied_ts) VALUES (?, ?)",
                 (SCHEMA_VERSION, now()),
             )?;
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ux_checks ON service_checks (node_id, service_id, observed_at)",
+                [],
+            )?;
             Ok(SCHEMA_VERSION)
         }
         Some(v) if v < SCHEMA_VERSION => {
@@ -126,9 +142,45 @@ pub fn init(path: &Path) -> rusqlite::Result<i64> {
                 }
                 version = 2;
             }
+            if version < 3 {
+                // Add observed_at if the table predates it. Existing rows keep 0, which would
+                // collide under the new unique index, so they are backfilled from timestamp:
+                // for a local head the two are the same observation anyway.
+                let has_col: bool = conn
+                    .query_row(
+                        "SELECT 1 FROM pragma_table_info('service_checks') WHERE name='observed_at'",
+                        [],
+                        |_| Ok(true),
+                    )
+                    .unwrap_or(false);
+                if !has_col {
+                    conn.execute(
+                        "ALTER TABLE service_checks ADD COLUMN observed_at INTEGER NOT NULL DEFAULT 0",
+                        [],
+                    )?;
+                }
+                conn.execute(
+                    "UPDATE service_checks SET observed_at = timestamp WHERE observed_at = 0",
+                    [],
+                )?;
+                // v3 makes a check idempotent: the unique index below turns a retried report into
+                // a no-op. Existing databases carry duplicate rows from the old unconstrained
+                // INSERT (two writers, one second), so they are collapsed first or the index
+                // cannot be built.
+                conn.execute(
+                    "DELETE FROM service_checks WHERE rowid NOT IN (\
+                     SELECT MIN(rowid) FROM service_checks GROUP BY node_id, service_id, timestamp)",
+                    [],
+                )?;
+                version = 3;
+            }
             conn.execute(
                 "UPDATE schema_version SET version = ?, applied_ts = ?",
                 (version, now()),
+            )?;
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ux_checks ON service_checks (node_id, service_id, observed_at)",
+                [],
             )?;
             Ok(version)
         }
@@ -167,12 +219,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn init_is_idempotent_and_reports_v2() {
+    fn init_is_idempotent_and_reports_the_current_version() {
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("status.db");
-        assert_eq!(init(&db).unwrap(), 2);
-        assert_eq!(init(&db).unwrap(), 2);
-        assert_eq!(version(&db).unwrap(), 2);
+        assert_eq!(init(&db).unwrap(), SCHEMA_VERSION);
+        assert_eq!(init(&db).unwrap(), SCHEMA_VERSION);
+        assert_eq!(version(&db).unwrap(), SCHEMA_VERSION);
     }
 
     #[test]
@@ -190,7 +242,7 @@ mod tests {
             )
             .unwrap();
         }
-        assert_eq!(init(&db).unwrap(), 2);
+        assert_eq!(init(&db).unwrap(), SCHEMA_VERSION);
         let ignored = ignored_ids(&db, "local").unwrap();
         assert_eq!(ignored, vec!["docker".to_string(), "lmstudio".to_string()]);
         let conn = connect(&db).unwrap();
@@ -214,6 +266,81 @@ mod tests {
     }
 
     #[test]
+    fn v2_database_upgrades_to_v3_and_keeps_its_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("v2.db");
+        // Build a v2 database the way the old code left it: no nodes table, no unique index.
+        {
+            let conn = connect(&db).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE schema_version (version INTEGER NOT NULL, applied_ts INTEGER NOT NULL);
+                 INSERT INTO schema_version VALUES (2, 0);
+                 CREATE TABLE service_checks (node_id TEXT NOT NULL, service_id TEXT NOT NULL,
+                    timestamp INTEGER NOT NULL, status TEXT NOT NULL, detail TEXT NOT NULL,
+                    latency_ms INTEGER NOT NULL);
+                 CREATE TABLE incidents (id INTEGER PRIMARY KEY AUTOINCREMENT, node_id TEXT NOT NULL,
+                    service_id TEXT NOT NULL, name TEXT NOT NULL, grp TEXT NOT NULL,
+                    started_ts INTEGER NOT NULL, ended_ts INTEGER, last_detail TEXT NOT NULL DEFAULT '');
+                 INSERT INTO service_checks VALUES ('local','a',100,'up','HTTP 200',5);
+                 INSERT INTO service_checks VALUES ('local','a',200,'down','refused',3);
+                 INSERT INTO incidents (node_id,service_id,name,grp,started_ts) VALUES ('local','a','A','G',150);",
+            )
+            .unwrap();
+        }
+        assert_eq!(init(&db).unwrap(), 3);
+        let conn = connect(&db).unwrap();
+        let checks: i64 = conn.query_row("SELECT COUNT(*) FROM service_checks", [], |r| r.get(0)).unwrap();
+        let incs: i64 = conn.query_row("SELECT COUNT(*) FROM incidents", [], |r| r.get(0)).unwrap();
+        assert_eq!(checks, 2, "migration lost check rows");
+        assert_eq!(incs, 1, "migration lost incidents");
+        let nodes: bool = conn
+            .query_row("SELECT 1 FROM sqlite_master WHERE type='table' AND name='nodes'", [], |_| Ok(true))
+            .unwrap_or(false);
+        assert!(nodes, "v3 must create the nodes table");
+    }
+
+    #[test]
+    fn v2_duplicate_checks_are_collapsed_before_the_index_is_built() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("dupes.db");
+        {
+            let conn = connect(&db).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE schema_version (version INTEGER NOT NULL, applied_ts INTEGER NOT NULL);
+                 INSERT INTO schema_version VALUES (2, 0);
+                 CREATE TABLE service_checks (node_id TEXT NOT NULL, service_id TEXT NOT NULL,
+                    timestamp INTEGER NOT NULL, status TEXT NOT NULL, detail TEXT NOT NULL,
+                    latency_ms INTEGER NOT NULL);
+                 INSERT INTO service_checks VALUES ('local','a',100,'up','x',1);
+                 INSERT INTO service_checks VALUES ('local','a',100,'up','x',1);
+                 INSERT INTO service_checks VALUES ('local','a',100,'up','x',1);",
+            )
+            .unwrap();
+        }
+        // This is the real bug: two writers landed in the same second, and the old schema had no
+        // constraint to stop them. The upgrade must not fail.
+        assert_eq!(init(&db).unwrap(), 3);
+        let conn = connect(&db).unwrap();
+        let n: i64 = conn.query_row("SELECT COUNT(*) FROM service_checks", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 1, "duplicates survived the migration");
+    }
+
+    #[test]
+    fn a_duplicate_check_write_is_a_noop_at_v3() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("idem.db");
+        init(&db).unwrap();
+        let conn = connect(&db).unwrap();
+        // Column order is (node_id, service_id, timestamp, status, detail, latency_ms, observed_at).
+        let sql = "INSERT OR IGNORE INTO service_checks VALUES ('local','a',100,'up','x',1,100)";
+        conn.execute(sql, []).unwrap();
+        conn.execute(sql, []).unwrap();
+        conn.execute(sql, []).unwrap();
+        let n: i64 = conn.query_row("SELECT COUNT(*) FROM service_checks", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 1, "a retried report must not add rows");
+    }
+
+    #[test]
     fn prune_drops_only_expired_rows() {
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("status.db");
@@ -222,11 +349,17 @@ mod tests {
         {
             let conn = connect(&db).unwrap();
             conn.execute(
-                "INSERT INTO service_checks VALUES ('local','a',?, 'up','',0)",
-                (t - RAW_RETENTION_S - 10,),
+                "INSERT INTO service_checks (node_id, service_id, timestamp, status, detail, latency_ms, observed_at) \
+                 VALUES ('local','a',?, 'up','',0,?)",
+                (t - RAW_RETENTION_S - 10, t - RAW_RETENTION_S - 10),
             )
             .unwrap();
-            conn.execute("INSERT INTO service_checks VALUES ('local','a',?, 'up','',0)", (t,)).unwrap();
+            conn.execute(
+                "INSERT INTO service_checks (node_id, service_id, timestamp, status, detail, latency_ms, observed_at) \
+                 VALUES ('local','a',?, 'up','',0,?)",
+                (t, t),
+            )
+            .unwrap();
         }
         let (checks, _) = prune(&db, Some(t)).unwrap();
         assert_eq!(checks, 1);

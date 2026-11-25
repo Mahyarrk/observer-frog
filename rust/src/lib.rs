@@ -3,6 +3,7 @@
 pub mod catalog;
 pub mod config;
 pub mod db;
+pub mod ingest;
 pub mod metrics;
 pub mod notify;
 pub mod poller;
