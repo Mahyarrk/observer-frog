@@ -140,6 +140,8 @@ pub fn install(cfg: &config::Config, config_path: Option<&Path>) -> i32 {
     }
 
     // Copy the running binary to a stable path before writing a unit that points at it.
+    // This runs on every `install`, which is also how an upgrade lands: the unit points at the
+    // copy, so re-installing is the documented way to replace a running version.
     let self_path = std::env::current_exe().unwrap_or_default();
     if self_path != binary {
         if let Err(e) = fs::copy(&self_path, &binary) {
@@ -204,6 +206,11 @@ pub fn install(cfg: &config::Config, config_path: Option<&Path>) -> i32 {
         println!("  to start at boot without logging in: loginctl enable-linger $USER");
     }
     println!("  autostart is on; `uninstall` removes it");
+    if cfg!(target_os = "macos") {
+        println!("  the service runs the copy above: re-run `install` after a rebuild, then restart it");
+    } else {
+        println!("  the service runs the copy above: re-run `install` after a rebuild, then `systemctl --user restart`");
+    }
     0
 }
 
