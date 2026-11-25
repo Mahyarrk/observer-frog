@@ -47,6 +47,7 @@ pub fn build_report(cfg: &Config, rows: &[Value], observed_at: i64) -> Value {
                 "status": r["status"],
                 "detail": r["detail"],
                 "latency_ms": r["latency_ms"],
+                "ram_mb": r["ram_mb"],
                 "ports": r["ports"],
                 "address": r["address"],
             })

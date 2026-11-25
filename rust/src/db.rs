@@ -8,7 +8,7 @@ use rusqlite::{Connection, OpenFlags};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub const SCHEMA_VERSION: i64 = 7;
+pub const SCHEMA_VERSION: i64 = 8;
 pub const RAW_RETENTION_S: i64 = 86_400; // 24 h of per-check rows
 pub const ROLLUP_RETENTION_S: i64 = 2_592_000; // 30 days of hourly counters
 
@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS service_state (
     name        TEXT    NOT NULL DEFAULT '',
     grp         TEXT    NOT NULL DEFAULT '',
     last_detail TEXT    NOT NULL DEFAULT '',
+    ram_mb      REAL    NOT NULL DEFAULT 0,
     PRIMARY KEY (node_id, service_id)
 );
 
@@ -256,6 +257,24 @@ pub fn init(path: &Path) -> rusqlite::Result<i64> {
                     }
                 }
                 version = 7;
+            }
+            if version < 8 {
+                // Memory per service. Added after the fact, so an existing database gains the
+                // column here rather than being rebuilt — the history in it is the point.
+                let has: bool = conn
+                    .query_row(
+                        "SELECT 1 FROM pragma_table_info('service_state') WHERE name='ram_mb'",
+                        [],
+                        |_| Ok(true),
+                    )
+                    .unwrap_or(false);
+                if !has {
+                    conn.execute(
+                        "ALTER TABLE service_state ADD COLUMN ram_mb REAL NOT NULL DEFAULT 0",
+                        [],
+                    )?;
+                }
+                version = 8;
             }
             conn.execute(
                 "UPDATE schema_version SET version = ?, applied_ts = ?",

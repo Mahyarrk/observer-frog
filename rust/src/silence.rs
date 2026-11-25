@@ -91,6 +91,7 @@ pub fn mark_node_silent(
             status: "unavailable".into(),
             detail: SILENT_DETAIL.into(),
             latency_ms: 0,
+            ram_mb: prev.ram_mb,
             ports: prev.ports.clone(),
             address: prev.address.clone(),
         };

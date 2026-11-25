@@ -66,6 +66,9 @@ pub struct ReportService {
     pub status: String,
     pub detail: String,
     pub latency_ms: i64,
+    /// Resident memory across this service's processes. `0.0` means "could not be attributed";
+    /// the UI renders that as "—" rather than claiming the service uses no memory.
+    pub ram_mb: f64,
     /// Where the service actually listens, as the tail discovered or was told. The head cannot
     /// work this out for another machine, so it must be carried rather than guessed.
     pub ports: String,
@@ -124,6 +127,7 @@ pub fn parse(body: &[u8]) -> Result<Report, String> {
                     status,
                     detail: item.get("detail").and_then(|v| v.as_str()).unwrap_or("").to_string(),
                     latency_ms: item.get("latency_ms").and_then(|v| v.as_i64()).unwrap_or(0),
+                    ram_mb: item.get("ram_mb").and_then(|v| v.as_f64()).unwrap_or(0.0),
                     ports: item.get("ports").and_then(|v| v.as_str()).unwrap_or("").to_string(),
                     address: item.get("address").and_then(|v| v.as_str()).unwrap_or("").to_string(),
                 });
@@ -207,6 +211,7 @@ pub fn apply(app: &App, report: &Report, head_now: i64) -> rusqlite::Result<usiz
                 status: s.status.clone(),
                 detail: s.detail.clone(),
                 latency_ms: s.latency_ms,
+                ram_mb: s.ram_mb,
                 ports: s.ports.clone(),
                 address: s.address.clone(),
             })

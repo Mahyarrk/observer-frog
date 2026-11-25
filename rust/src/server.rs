@@ -139,6 +139,9 @@ impl App {
                     "status": st.state,
                     "detail": st.last_detail,
                     "latency_ms": 0,
+                    // The tail measured this on its own machine; the head only relays it. It must
+                    // never re-resolve a remote port locally — both machines bind 8770.
+                    "ram_mb": st.ram_mb,
                     "ports": st.ports,
                     "address": st.address,
                 })
@@ -252,6 +255,7 @@ impl App {
                     status: r["status"].as_str().unwrap_or("down").to_string(),
                     detail: r["detail"].as_str().unwrap_or("").to_string(),
                     latency_ms: r["latency_ms"].as_i64().unwrap_or(0),
+                    ram_mb: r["ram_mb"].as_f64().unwrap_or(0.0),
                     ports: r["ports"].as_str().unwrap_or("").to_string(),
                     address: r["address"].as_str().unwrap_or("").to_string(),
                 })

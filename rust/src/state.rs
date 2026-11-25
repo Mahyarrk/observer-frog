@@ -59,6 +59,8 @@ pub struct Row {
     pub status: String,
     pub detail: String,
     pub latency_ms: i64,
+    /// Resident memory (MB) summed across this service's processes; 0.0 = not attributable.
+    pub ram_mb: f64,
     pub ports: String,
     pub address: String,
 }
@@ -67,6 +69,7 @@ pub struct Row {
 pub struct StoredState {
     pub state: String,
     pub fails: i64,
+    pub ram_mb: f64,
     pub since_ts: i64,
     pub name: String,
     pub group: String,
@@ -78,7 +81,7 @@ pub struct StoredState {
 pub fn load_states(path: &Path, node_id: &str) -> rusqlite::Result<HashMap<String, StoredState>> {
     let conn = db::connect(path)?;
     let mut stmt = conn.prepare(
-        "SELECT service_id, state, fails, since_ts, name, grp, last_detail, ports, addr FROM service_state WHERE node_id = ?",
+        "SELECT service_id, state, fails, since_ts, name, grp, last_detail, ports, addr, ram_mb FROM service_state WHERE node_id = ?",
     )?;
     let mut out = HashMap::new();
     let rows = stmt.query_map((node_id,), |r| {
@@ -87,6 +90,7 @@ pub fn load_states(path: &Path, node_id: &str) -> rusqlite::Result<HashMap<Strin
             StoredState {
                 state: r.get(1)?,
                 fails: r.get(2)?,
+                ram_mb: r.get(9)?,
                 since_ts: r.get(3)?,
                 name: r.get(4)?,
                 group: r.get(5)?,
@@ -105,13 +109,13 @@ pub fn load_states(path: &Path, node_id: &str) -> rusqlite::Result<HashMap<Strin
 
 fn save_state(conn: &Connection, node_id: &str, service_id: &str, st: &StoredState) -> rusqlite::Result<()> {
     conn.execute(
-        "INSERT INTO service_state (node_id, service_id, state, fails, since_ts, name, grp, last_detail, ports, addr) \
-         VALUES (?,?,?,?,?,?,?,?,?,?) \
+        "INSERT INTO service_state (node_id, service_id, state, fails, since_ts, name, grp, last_detail, ports, addr, ram_mb) \
+         VALUES (?,?,?,?,?,?,?,?,?,?,?) \
          ON CONFLICT(node_id, service_id) DO UPDATE SET \
          state=excluded.state, fails=excluded.fails, since_ts=excluded.since_ts, \
          name=excluded.name, grp=excluded.grp, last_detail=excluded.last_detail, \
-         ports=excluded.ports, addr=excluded.addr",
-        (node_id, service_id, &st.state, st.fails, st.since_ts, &st.name, &st.group, &st.last_detail, &st.ports, &st.address),
+         ports=excluded.ports, addr=excluded.addr, ram_mb=excluded.ram_mb",
+        (node_id, service_id, &st.state, st.fails, st.since_ts, &st.name, &st.group, &st.last_detail, &st.ports, &st.address, st.ram_mb),
     )?;
     Ok(())
 }
@@ -189,6 +193,7 @@ fn seed_new(conn: &Connection, node_id: &str, row: &Row, ts: i64, observed_at: i
     let st = StoredState {
         state: row.status.clone(),
         fails: 0,
+        ram_mb: 0.0,
         since_ts: ts,
         name: row.name.clone(),
         group: row.group.clone(),
@@ -322,7 +327,8 @@ fn sweep_absent(
             continue;
         }
         let ghost = Row {
-            service_id: sid.clone(),
+            ram_mb: 0.0,
+            service_id: sid.to_string(),
             name: if prev.name.is_empty() { sid.clone() } else { prev.name.clone() },
             group: prev.group.clone(),
             status: "down".into(),
@@ -334,6 +340,7 @@ fn sweep_absent(
         let mut ghost_prev = StoredState {
             state: prev.state.clone(),
             fails: prev.fails + 1,
+            ram_mb: 0.0,
             since_ts: prev.since_ts,
             name: prev.name.clone(),
             group: prev.group.clone(),
