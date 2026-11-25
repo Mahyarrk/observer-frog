@@ -907,8 +907,13 @@ fn route(req: &Request, app: &Arc<App>) -> (u16, String, Vec<u8>, bool) {
                     "ok": true, "requests": [], "note": "this node is not acting as head",
                 })), false);
             }
+            // Both lists in one call: the page shows pending requests above the machines already
+            // paired, and a second round trip would let the two disagree.
             let rows = crate::pair::pending(&app.cfg.db_path);
-            (200, json_ct, json_bytes(&json!({"ok": true, "requests": rows})), false)
+            let known = crate::pair::paired(&app.cfg.db_path);
+            (200, json_ct, json_bytes(&json!({
+                "ok": true, "requests": rows, "paired": known,
+            })), false)
         }
         ("POST", _) if normalized == "/api/pair/decide" => {
             if req.body.len() > MAX_BODY {
@@ -923,6 +928,17 @@ fn route(req: &Request, app: &Arc<App>) -> (u16, String, Vec<u8>, bool) {
                 crate::pair::reject(&app.cfg.db_path, id)
             };
             match res {
+                Ok(msg) => (200, json_ct, json_bytes(&json!({"ok": true, "detail": msg})), false),
+                Err(e) => (400, json_ct, json_bytes(&json!({"ok": false, "error": e})), false),
+            }
+        }
+        ("POST", _) if normalized == "/api/pair/remove" => {
+            if req.body.len() > MAX_BODY {
+                return (413, json_ct, json_bytes(&json!({"ok": false, "error": "body too large"})), false);
+            }
+            let b: Value = serde_json::from_slice(&req.body).unwrap_or(json!({}));
+            let node_id = b.get("node_id").and_then(|v| v.as_str()).unwrap_or("");
+            match crate::pair::unpair(&app.cfg.db_path, node_id) {
                 Ok(msg) => (200, json_ct, json_bytes(&json!({"ok": true, "detail": msg})), false),
                 Err(e) => (400, json_ct, json_bytes(&json!({"ok": false, "error": e})), false),
             }

@@ -424,6 +424,10 @@
     /* Pairing: a request is a decision, so the two actions read as yes and no, not as buttons. */
     .pair-list { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
     .pair-empty { margin: 0; font-size: 12px; opacity: .7; }
+    .pair-subtitle {
+      font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
+      opacity: .7; margin: 18px 0 0;
+    }
     .pair-row {
       display: flex; align-items: center; justify-content: space-between; gap: 12px;
       padding: 10px 12px; border-radius: 10px;
@@ -1979,6 +1983,11 @@
           </p>
           <div id="pair-list" class="pair-list"></div>
           <p class="settings-note" id="pair-note"></p>
+          <h3 class="pair-subtitle">Paired machines</h3>
+          <p class="settings-hint">
+            Machines this head trusts. Removing one revokes its token: it has to ask to pair again.
+          </p>
+          <div id="paired-list" class="pair-list"></div>
         </div>
 
         <div class="settings-card">
@@ -2097,7 +2106,7 @@
       const API_BASE = (window.location.pathname.replace(/\/$/, '') || '');
       // Bump on every shell change. Declared before first use: a `const` referenced above its
       // declaration throws a TDZ error and takes the whole script down (it did).
-      const BUILD = 'of-17';
+      const BUILD = 'of-18';
       // Show the address actually in use, not a baked-in host.
       (function () {
         const el = document.getElementById('brand-url');
@@ -3191,6 +3200,7 @@
         // there empty and implying something is broken.
         const card = document.getElementById('pair-card');
         if (card) card.hidden = !!(d && d.note);
+        renderPaired((d && d.paired) || []);
         if (!rows.length) {
           list.innerHTML = '<p class="pair-empty">' +
             (d && d.note ? escapeHtml(d.note) : 'No machines are asking to pair.') + '</p>';
@@ -3210,6 +3220,50 @@
         list.querySelectorAll('button[data-approve]').forEach((b) => {
           b.addEventListener('click', () => decidePairing(b.dataset.id, b.dataset.approve === '1'));
         });
+      }
+
+      // Machines already trusted, with the one action that applies to them.
+      function renderPaired(rows) {
+        const list = document.getElementById('paired-list');
+        if (!list) return;
+        if (!rows.length) {
+          list.innerHTML = '<p class="pair-empty">No machines are paired yet.</p>';
+          return;
+        }
+        const now = Math.floor(Date.now() / 1000);
+        list.innerHTML = rows.map((r) => {
+          const age = now - (r.last_seen_ts || 0);
+          const seen = !r.last_seen_ts ? 'never reported'
+            : age < 90 ? age + 's ago'
+            : age < 5400 ? Math.round(age / 60) + 'm ago'
+            : Math.round(age / 3600) + 'h ago';
+          return '<div class="pair-row">' +
+            '<div class="pair-who"><strong>' + escapeHtml(r.name || r.node_id) + '</strong>' +
+            '<span class="pair-addr">' + escapeHtml(r.node_id) + ' · ' + escapeHtml(seen) + '</span></div>' +
+            '<div class="pair-acts">' +
+            '<button class="pair-btn pair-no" data-remove="' + escapeHtml(r.node_id) + '" title="Remove">&times;</button>' +
+            '</div></div>';
+        }).join('');
+        list.querySelectorAll('button[data-remove]').forEach((b) => {
+          b.addEventListener('click', () => removePairing(b.dataset.remove));
+        });
+      }
+
+      async function removePairing(nodeId) {
+        const note = document.getElementById('pair-note');
+        try {
+          const r = await fetch('api/pair/remove', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ node_id: nodeId }),
+          });
+          const d = await r.json();
+          if (note) note.textContent = d.ok ? (d.detail || 'removed') : (d.error || 'failed');
+        } catch (e) {
+          if (note) note.textContent = 'failed: ' + e;
+        }
+        await loadPairing();
+        if (typeof loadNodes === 'function') await loadNodes();
       }
 
       async function decidePairing(id, approve) {

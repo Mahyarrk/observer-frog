@@ -118,6 +118,60 @@ pub fn approve(db_path: &Path, id: i64) -> Result<String, String> {
     Ok(format!("{node_id} approved from {address}"))
 }
 
+/// Machines currently paired with this head, newest sighting first.
+///
+/// Distinct from the pending list: these are trusted, and the only action that applies to one is
+/// removal. `last_seen_ts` is 0 for a machine that has been paired but has not reported since.
+pub fn paired(db_path: &Path) -> Vec<Value> {
+    let Ok(conn) = db::connect(db_path) else { return Vec::new() };
+    let Ok(mut stmt) = conn.prepare(
+        "SELECT node_id, name, reported_name, last_seen_ts, interval_s, first_seen_ts \
+         FROM nodes WHERE token_sha256 <> '' ORDER BY last_seen_ts DESC",
+    ) else {
+        return Vec::new();
+    };
+    let rows = stmt.query_map([], |r| {
+        let node_id: String = r.get(0)?;
+        let name: String = r.get(1)?;
+        let reported: String = r.get(2)?;
+        Ok(json!({
+            "node_id": node_id,
+            // The device's own word wins over the enrolment name, the same rule the dashboard uses.
+            "name": if reported.is_empty() { name } else { reported },
+            "last_seen_ts": r.get::<_, i64>(3)?,
+            "interval_s": r.get::<_, i64>(4)?,
+            "paired_ts": r.get::<_, i64>(5)?,
+        }))
+    });
+    rows.map(|it| it.flatten().collect()).unwrap_or_default()
+}
+
+/// Unpair one machine: its token and everything it ever reported.
+///
+/// Scoped to a single node rather than "all but me", because the operator picks a row. Removing it
+/// means the next report is an unknown token, so the machine has to ask again — which is what
+/// revoking trust should mean.
+pub fn unpair(db_path: &Path, node_id: &str) -> Result<String, String> {
+    if node_id.trim().is_empty() {
+        return Err("which machine?".into());
+    }
+    let conn = db::connect(db_path).map_err(|e| e.to_string())?;
+    for sql in [
+        "DELETE FROM service_state WHERE node_id = ?1",
+        "DELETE FROM service_checks WHERE node_id = ?1",
+        "DELETE FROM hourly_rollup WHERE node_id = ?1",
+        "DELETE FROM incidents WHERE node_id = ?1",
+        "DELETE FROM ignored WHERE node_id = ?1",
+        "DELETE FROM pair_requests WHERE node_id = ?1",
+        "DELETE FROM nodes WHERE node_id = ?1",
+    ] {
+        if let Ok(mut stmt) = conn.prepare(sql) {
+            let _ = stmt.execute([node_id]);
+        }
+    }
+    Ok(format!("{node_id} removed"))
+}
+
 /// Reject a request: the row is kept as a record of the decision, but the token never becomes real.
 pub fn reject(db_path: &Path, id: i64) -> Result<String, String> {
     let conn = db::connect(db_path).map_err(|e| e.to_string())?;
@@ -219,6 +273,25 @@ mod tests {
         let p = pending(&db);
         assert_eq!(p.len(), 1, "a restarting tail must not pile up requests");
         assert_eq!(p[0]["name"], "new");
+    }
+
+    #[test]
+    fn removing_a_paired_machine_revokes_it_and_leaves_the_others() {
+        let db = fresh("unpair");
+        request(&db, "keep", "", "tok-keep", "192.0.2.1", 30).unwrap();
+        approve(&db, pending(&db)[0]["id"].as_i64().unwrap()).unwrap();
+        request(&db, "drop", "", "tok-drop", "192.0.2.2", 30).unwrap();
+        approve(&db, pending(&db)[0]["id"].as_i64().unwrap()).unwrap();
+        assert_eq!(paired(&db).len(), 2);
+
+        unpair(&db, "drop").unwrap();
+
+        assert_eq!(paired(&db).len(), 1, "only the chosen machine goes");
+        assert!(crate::ingest::node_for_token(&db, "tok-drop").is_none(), "its token is revoked");
+        assert!(
+            crate::ingest::node_for_token(&db, "tok-keep").is_some(),
+            "removing one machine must not disturb another"
+        );
     }
 
     #[test]
