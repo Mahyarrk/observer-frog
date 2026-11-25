@@ -421,6 +421,26 @@
     }
     .settings-hint { font-size: 12px; opacity: .72; margin: 0; line-height: 1.5; }
     .settings-note { font-size: 12px; opacity: .8; margin: 4px 0 0; }
+    /* Pairing: a request is a decision, so the two actions read as yes and no, not as buttons. */
+    .pair-list { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+    .pair-empty { margin: 0; font-size: 12px; opacity: .7; }
+    .pair-row {
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      padding: 10px 12px; border-radius: 10px;
+      background: var(--card); border: 1px solid var(--border);
+    }
+    .pair-who { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+    .pair-who strong { font-size: 13px; }
+    .pair-addr { font-size: 11px; opacity: .65; font-family: var(--mono, monospace); }
+    .pair-acts { display: flex; gap: 6px; flex: 0 0 auto; }
+    .pair-btn {
+      width: 30px; height: 30px; border-radius: 8px; cursor: pointer;
+      border: 1px solid var(--border); background: transparent;
+      font-size: 14px; line-height: 1; color: var(--foreground);
+    }
+    .pair-btn:hover { border-color: currentColor; }
+    .pair-yes { color: var(--up-color); }
+    .pair-no { color: var(--down-color); }
     .settings-warning {
       margin: 0; padding: 10px 14px; border-radius: 10px; font-size: 12px; line-height: 1.5;
       background: var(--down-bg); border: 1px solid var(--down-border); color: var(--down-color);
@@ -1951,6 +1971,16 @@
           </div>
         </div>
 
+        <div class="settings-card" id="pair-card">
+          <h2 class="settings-title">Pairing requests</h2>
+          <p class="settings-hint">
+            A machine that finds this head asks to join. Nothing it sends is accepted until you
+            approve it here.
+          </p>
+          <div id="pair-list" class="pair-list"></div>
+          <p class="settings-note" id="pair-note"></p>
+        </div>
+
         <div class="settings-card">
           <h2 class="settings-title">Find a head on this network</h2>
           <p class="settings-hint">
@@ -2067,7 +2097,7 @@
       const API_BASE = (window.location.pathname.replace(/\/$/, '') || '');
       // Bump on every shell change. Declared before first use: a `const` referenced above its
       // declaration throws a TDZ error and takes the whole script down (it did).
-      const BUILD = 'of-16';
+      const BUILD = 'of-17';
       // Show the address actually in use, not a baked-in host.
       (function () {
         const el = document.getElementById('brand-url');
@@ -3146,6 +3176,59 @@
         } catch (e) { settingsNote('save failed: ' + e); }
       }
 
+      // ---- pairing -----------------------------------------------------
+      // A tail asks; this list is the asking. Nothing is a credential until the tick is pressed,
+      // which is the whole reason the request is shown rather than auto-accepted.
+      async function loadPairing() {
+        const list = document.getElementById('pair-list');
+        if (!list) return;
+        let d;
+        try {
+          d = await (await fetch('api/pair', { cache: 'no-store' })).json();
+        } catch (_) { return; }
+        const rows = (d && d.requests) || [];
+        // Only a head can approve anyone, so the card hides itself on a tail rather than sitting
+        // there empty and implying something is broken.
+        const card = document.getElementById('pair-card');
+        if (card) card.hidden = !!(d && d.note);
+        if (!rows.length) {
+          list.innerHTML = '<p class="pair-empty">' +
+            (d && d.note ? escapeHtml(d.note) : 'No machines are asking to pair.') + '</p>';
+          return;
+        }
+        list.innerHTML = rows.map((r) => {
+          const who = escapeHtml(r.name || r.node_id);
+          const addr = escapeHtml(r.address || '');
+          return '<div class="pair-row" data-id="' + r.id + '">' +
+            '<div class="pair-who"><strong>' + who + '</strong>' +
+            '<span class="pair-addr">' + addr + '</span></div>' +
+            '<div class="pair-acts">' +
+            '<button class="pair-btn pair-yes" data-id="' + r.id + '" data-approve="1" title="Approve">&#10003;</button>' +
+            '<button class="pair-btn pair-no" data-id="' + r.id + '" data-approve="0" title="Reject">&#10007;</button>' +
+            '</div></div>';
+        }).join('');
+        list.querySelectorAll('button[data-approve]').forEach((b) => {
+          b.addEventListener('click', () => decidePairing(b.dataset.id, b.dataset.approve === '1'));
+        });
+      }
+
+      async function decidePairing(id, approve) {
+        const note = document.getElementById('pair-note');
+        try {
+          const r = await fetch('api/pair/decide', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: Number(id), approve }),
+          });
+          const d = await r.json();
+          if (note) note.textContent = d.ok ? (d.detail || 'done') : (d.error || 'failed');
+        } catch (e) {
+          if (note) note.textContent = 'failed: ' + e;
+        }
+        await loadPairing();
+        if (typeof loadNodes === 'function') await loadNodes();
+      }
+
       function initSettings() {
         const on = (id, fn) => {
           const el = document.getElementById(id);
@@ -3327,6 +3410,7 @@
           loadSettings();
           loadServices();
           loadCatalog();
+          loadPairing();
         }
         try { localStorage.setItem(ACTIVE_TAB_KEY, activeTab); } catch (_) {}
       }

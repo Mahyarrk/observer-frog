@@ -4,6 +4,8 @@ use crate::config::{Config, Watcher};
 use crate::notify::Notifier;
 use crate::poller;
 use crate::server::{self, App};
+// Declared here so the poller closure can hold it: asking once per head is the difference
+// between a pairing request and a flood of them.
 use crate::silence;
 use crate::state;
 use std::path::PathBuf;
@@ -108,10 +110,12 @@ pub fn run(cfg: Config, config_path: Option<PathBuf>, tls: Option<(PathBuf, Path
     *poller_holder.lock().unwrap() = Some(Arc::clone(&p));
 
     let sweeper_halt = p.halt_flag();
+    let asked_to_pair: Arc<Mutex<bool>> = Arc::new(Mutex::new(false));
     {
         let app = Arc::clone(&app);
         let watcher_holder = Arc::clone(&watcher_holder);
         let halt = p.halt_flag();
+        let asked_to_pair = Arc::clone(&asked_to_pair);
         std::thread::spawn(move || {
             while !halt.load(Ordering::SeqCst) {
                 let cfg_now = {
@@ -166,6 +170,21 @@ pub fn run(cfg: Config, config_path: Option<PathBuf>, tls: Option<(PathBuf, Path
                                     app.reports_failed.fetch_add(1, Ordering::Relaxed);
                                     *app.last_report_error.lock().unwrap() = Some(e.clone());
                                     log_line(&format!("report to {head} failed: {e}"));
+                                    // A head that does not know this machine is the pairing case.
+                                    // Ask once, then keep reporting quietly: a tail that re-asked
+                                    // every wave would fill the head's list with duplicates, and a
+                                    // person still has to click approve either way.
+                                    if e.contains("unknown token") && !*asked_to_pair.lock().unwrap() {
+                                        *asked_to_pair.lock().unwrap() = true;
+                                        let ask = cfg_now.token().map(|t| {
+                                            crate::pair::ask_head(&head, &cfg_now.node_id, &crate::config::hostname(), &t, cfg_now.poll_interval as i64)
+                                        });
+                                        match ask {
+                                            Ok(Ok(msg)) => log_line(&format!("pairing: {msg}")),
+                                            Ok(Err(why)) => log_line(&format!("pairing request failed: {why}")),
+                                            Err(why) => log_line(&format!("cannot ask to pair: {why}")),
+                                        }
+                                    }
                                 }
                             }
                         }

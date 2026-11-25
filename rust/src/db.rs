@@ -8,7 +8,7 @@ use rusqlite::{Connection, OpenFlags};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub const SCHEMA_VERSION: i64 = 8;
+pub const SCHEMA_VERSION: i64 = 9;
 pub const RAW_RETENTION_S: i64 = 86_400; // 24 h of per-check rows
 pub const ROLLUP_RETENTION_S: i64 = 2_592_000; // 30 days of hourly counters
 
@@ -67,6 +67,19 @@ CREATE TABLE IF NOT EXISTS hourly_rollup (
     lat_sum    INTEGER NOT NULL DEFAULT 0,
     lat_n      INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (node_id, service_id, hour_ts)
+);
+
+-- A tail asks to join; the head approves. Storing the request separately from `nodes` means an
+-- unapproved machine is not a known node, so it cannot report until someone says yes.
+CREATE TABLE IF NOT EXISTS pair_requests (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    node_id       TEXT    NOT NULL,
+    name          TEXT    NOT NULL DEFAULT '',
+    token_sha256  TEXT    NOT NULL DEFAULT '',
+    address       TEXT    NOT NULL DEFAULT '',
+    interval_s    INTEGER NOT NULL DEFAULT 30,
+    requested_ts  INTEGER NOT NULL DEFAULT 0,
+    status        TEXT    NOT NULL DEFAULT 'pending'
 );
 
 CREATE TABLE IF NOT EXISTS ignored (
@@ -307,6 +320,31 @@ pub fn init(path: &Path) -> rusqlite::Result<i64> {
                     )?;
                 }
                 version = 8;
+            }
+            if version < 9 {
+                // Pairing handshake. A tail asks to join; the head shows the request with approve
+                // and reject, because a token arriving over the network is not the same as an
+                // operator deciding to trust that machine. The token digest is stored here on
+                // approval — during the request itself it is not yet a credential.
+                conn.execute(
+                    "CREATE TABLE IF NOT EXISTS pair_requests (
+                        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                        node_id       TEXT    NOT NULL,
+                        name          TEXT    NOT NULL DEFAULT '',
+                        token_sha256  TEXT    NOT NULL DEFAULT '',
+                        address       TEXT    NOT NULL DEFAULT '',
+                        interval_s    INTEGER NOT NULL DEFAULT 30,
+                        requested_ts  INTEGER NOT NULL DEFAULT 0,
+                        status        TEXT    NOT NULL DEFAULT 'pending'
+                     )",
+                    [],
+                )?;
+                conn.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS ux_pair_pending ON pair_requests (node_id) \
+                     WHERE status = 'pending'",
+                    [],
+                )?;
+                version = 9;
             }
             conn.execute(
                 "UPDATE schema_version SET version = ?, applied_ts = ?",

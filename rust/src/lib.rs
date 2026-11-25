@@ -10,6 +10,7 @@ pub mod lan;
 pub mod settings;
 pub mod metrics;
 pub mod notify;
+pub mod pair;
 pub mod poller;
 pub mod probes;
 pub mod runtime;

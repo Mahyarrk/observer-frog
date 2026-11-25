@@ -95,7 +95,10 @@ pub fn post(opts: &TailOptions, body: &Value) -> Result<Value, String> {
         Err(ureq::Error::Status(code, r)) => {
             let text = r.into_string().unwrap_or_default();
             Err(match code {
-                401 => "401 unauthorised: the head does not know this token".to_string(),
+                // Phrased so the poller can recognise it: this exact case is what triggers a
+                // pairing request, and a head that simply is not acting as head must not.
+                401 => "401 unauthorised: unknown token — this head has no enrolment for this machine".to_string(),
+                503 => format!("503 the head is not accepting reports: {text}"),
                 403 => format!("403 rejected: {text}"),
                 413 => "413 report too large".to_string(),
                 _ => format!("HTTP {code}: {text}"),

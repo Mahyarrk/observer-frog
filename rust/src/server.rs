@@ -865,6 +865,66 @@ fn route(req: &Request, app: &Arc<App>) -> (u16, String, Vec<u8>, bool) {
                 "ok": true, "found": heads.len(), "heads": heads,
             })), false)
         }
+        ("POST", _) if normalized == "/api/pair" => {
+            // A tail asks to join. Deliberately unauthenticated: the token it proposes is not a
+            // credential yet, and requiring a secret to request one would be circular. Nothing
+            // happens until someone on this machine approves it.
+            if req.body.len() > MAX_BODY {
+                return (413, json_ct, json_bytes(&json!({"ok": false, "error": "body too large"})), false);
+            }
+            let b: Value = serde_json::from_slice(&req.body).unwrap_or(json!({}));
+            let node_id = b.get("node_id").and_then(|v| v.as_str()).unwrap_or("");
+            let name = b.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            let token = b.get("token").and_then(|v| v.as_str()).unwrap_or("");
+            let interval = b.get("interval_s").and_then(|v| v.as_i64()).unwrap_or(30);
+            if node_id.trim().is_empty() || token.trim().is_empty() {
+                return (400, json_ct, json_bytes(&json!({"ok": false, "error": "node_id and token are required"})), false);
+            }
+            let from = req
+                .headers
+                .get("x-forwarded-for")
+                .cloned()
+                .unwrap_or_else(|| "lan".to_string());
+            let path = crate::settings::target(&app.cfg);
+            match crate::pair::request(&path, node_id, name, token, &from, interval) {
+                Ok(_) => (200, json_ct, json_bytes(&json!({
+                    "ok": true,
+                    "pending": true,
+                    "detail": "waiting for the head to approve this machine",
+                })), false),
+                Err(e) => (500, json_ct, json_bytes(&json!({"ok": false, "error": e})), false),
+            }
+        }
+        ("GET" | "HEAD", _) if normalized == "/api/pair" => {
+            // Reading a pairing request only makes sense on a machine acting as head: a tail has
+            // nothing to approve, and saying so beats an empty list that looks like no requests.
+            if !app.cfg.serve {
+                return (200, json_ct, json_bytes(&json!({
+                    "ok": true, "requests": [], "note": "this node is not acting as head",
+                })), false);
+            }
+            let path = crate::settings::target(&app.cfg);
+            let rows = crate::pair::pending(&path);
+            (200, json_ct, json_bytes(&json!({"ok": true, "requests": rows})), false)
+        }
+        ("POST", _) if normalized == "/api/pair/decide" => {
+            if req.body.len() > MAX_BODY {
+                return (413, json_ct, json_bytes(&json!({"ok": false, "error": "body too large"})), false);
+            }
+            let b: Value = serde_json::from_slice(&req.body).unwrap_or(json!({}));
+            let id = b.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
+            let approve = b.get("approve").and_then(|v| v.as_bool()).unwrap_or(false);
+            let path = crate::settings::target(&app.cfg);
+            let res = if approve {
+                crate::pair::approve(&path, id)
+            } else {
+                crate::pair::reject(&path, id)
+            };
+            match res {
+                Ok(msg) => (200, json_ct, json_bytes(&json!({"ok": true, "detail": msg})), false),
+                Err(e) => (400, json_ct, json_bytes(&json!({"ok": false, "error": e})), false),
+            }
+        }
         ("POST", _) if normalized == "/api/ignore" => {
             if req.body.len() > MAX_BODY {
                 return (413, json_ct, json_bytes(&json!({"ok": false, "error": "body too large"})), false);

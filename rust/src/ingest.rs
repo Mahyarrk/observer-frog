@@ -253,6 +253,20 @@ pub fn handle_report(app: &App, req_headers: &std::collections::HashMap<String, 
         return (413, json!({"ok": false, "error": "report too large"}));
     }
 
+    // Only a node acting as head aggregates. A tail still binds this port — it keeps its own
+    // dashboard — but accepting a report here would re-create exactly the roster the role change
+    // just cleared, so a machine would silently re-pair itself after being unpaired.
+    let acting_head = match crate::config::load(Some(&crate::settings::target(&app.cfg))) {
+        Ok(c) => c.serve,
+        Err(_) => app.cfg.serve,
+    };
+    if !acting_head {
+        return (
+            503,
+            json!({"ok": false, "error": "this node is not acting as head; it does not accept reports"}),
+        );
+    }
+
     let token = req_headers
         .get("authorization")
         .and_then(|v| v.strip_prefix("Bearer "))
