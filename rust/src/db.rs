@@ -94,15 +94,16 @@ CREATE TABLE IF NOT EXISTS nodes (
 
 /// Forget every node except this machine.
 ///
-/// A node only aggregates others while it acts as head. Once it stops, the roster it built is dead
-/// weight: the phone's node picker would still offer machines this box no longer tracks, and every
-/// one of their services would sit in the dashboard as permanently unavailable. Called automatically
-/// when the role switches away from head, so the operator never has to clear anything by hand.
+/// Forget every other machine completely, enrolment included.
 ///
-/// The enrolment row survives, only emptied of its observations. Deleting it outright would take
-/// the token digest with it, and a report cannot restore a digest — so flipping back to head would
-/// silently reject a machine that had been paired for months. Blanking `last_seen_ts` is what makes
-/// the node vanish: the roster and the picker are built from nodes that have actually reported.
+/// A node only aggregates others while it acts as head. Once it stops, everything it knew about
+/// them is dead weight: the phone's node picker would still offer machines this box no longer
+/// tracks, and their services would sit in the dashboard as permanently unavailable. Called
+/// automatically when the role switches away from head, so nothing is ever cleared by hand.
+///
+/// The enrolment goes too, deliberately. A machine that later wants back in must `enrol` again,
+/// which is the point: dropping the roster is a real unpairing, not a pause. Keeping token digests
+/// for machines this node no longer watches would leave standing credentials for absent hosts.
 pub fn forget_other_nodes(db_path: &Path, keep_node_id: &str) -> Result<usize, String> {
     let conn = connect(db_path).map_err(|e| e.to_string())?;
     let mut removed = 0;
@@ -112,7 +113,7 @@ pub fn forget_other_nodes(db_path: &Path, keep_node_id: &str) -> Result<usize, S
         "DELETE FROM hourly_rollup WHERE node_id <> ?1",
         "DELETE FROM incidents WHERE node_id <> ?1",
         "DELETE FROM ignored WHERE node_id <> ?1",
-        "UPDATE nodes SET last_seen_ts = 0, metrics_json = '' WHERE node_id <> ?1",
+        "DELETE FROM nodes WHERE node_id <> ?1",
     ] {
         if let Ok(mut stmt) = conn.prepare(sql) {
             if let Ok(n) = stmt.execute([keep_node_id]) {
@@ -359,7 +360,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn forgetting_other_nodes_keeps_this_one_and_its_token() {
+    fn forgetting_other_nodes_unpairs_completely_but_keeps_this_machine() {
         let dir = std::env::temp_dir().join(format!("of-forget-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
         let db = dir.join("forget.db");
@@ -376,15 +377,13 @@ mod tests {
         let conn = connect(&db).unwrap();
         let seen: i64 = conn.query_row("SELECT last_seen_ts FROM nodes WHERE node_id='me'", [], |r| r.get(0)).unwrap();
         assert_eq!(seen, 111, "this machine's own data must survive");
-        // The other node keeps its enrolment: a report cannot restore a token digest, so deleting
-        // the row would silently unpair a machine that had been trusted for months.
-        let (other_seen, other_tok): (i64, String) = conn
-            .query_row("SELECT last_seen_ts, token_sha256 FROM nodes WHERE node_id='other'", [], |r| {
-                Ok((r.get(0)?, r.get(1)?))
-            })
+        // A hard unpairing: the row goes, so its token digest goes with it and the machine must
+        // enrol again. Leaving the digest behind would keep standing credentials for a host this
+        // node no longer watches.
+        let others: i64 = conn
+            .query_row("SELECT COUNT(*) FROM nodes WHERE node_id='other'", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(other_seen, 0, "the other node must drop out of the roster");
-        assert_eq!(other_tok, "bbb", "but its token has to survive, or re-pairing breaks");
+        assert_eq!(others, 0, "the other node must be forgotten entirely, token included");
         let states: i64 = conn
             .query_row("SELECT COUNT(*) FROM service_state WHERE node_id='other'", [], |r| r.get(0))
             .unwrap();

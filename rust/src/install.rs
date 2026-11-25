@@ -458,41 +458,6 @@ pub fn set_enabled(cfg: &config::Config, on: bool) -> Result<String, String> {
     }
 }
 
-/// Bounce the installed service so it picks up a new role from the config.
-///
-/// Switching head↔tail changes what the process does at startup (the silence sweeper is created
-/// from `serve`, and the poller's `report_to` is read at boot), so the change only takes effect on a
-/// fresh process. Doing it here rather than asking the operator to run a shell command is the whole
-/// point of the Settings switch: one click, and the node comes back in its new role.
-///
-/// Deliberately detached and delayed: the caller is usually the process being restarted, answering
-/// an HTTP request. If it restarted itself inline the reply would never reach the browser.
-pub fn restart_soon(delay_ms: u64) -> Result<(), String> {
-    let unit = unit_path("")?;
-    if !unit.exists() {
-        return Err("not installed — run `observer-frog install` once from a shell".into());
-    }
-    let script = if cfg!(target_os = "macos") {
-        // `kickstart -k` restarts the job in place, which is what a role change needs.
-        let uid = std::process::Command::new("id").arg("-u").output().ok()
-            .and_then(|o| String::from_utf8(o.stdout).ok())
-            .map(|s| s.trim().to_string())
-            .ok_or("cannot determine uid")?;
-        format!("sleep {:.1}; launchctl kickstart -k gui/{uid}/{LABEL}", delay_ms as f64 / 1000.0)
-    } else {
-        format!("sleep {:.1}; systemctl --user restart observer-frog.service", delay_ms as f64 / 1000.0)
-    };
-    std::process::Command::new("/bin/sh")
-        .arg("-c")
-        .arg(script)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .map(|_| ())
-        .map_err(|e| format!("cannot schedule the restart: {e}"))
-}
-
 /// Whether the unit is currently running, so `enable` can start a stopped node.
 fn is_running(_role: &str) -> bool {
     let label = LABEL;

@@ -261,7 +261,17 @@ pub fn handle_report(app: &App, req_headers: &std::collections::HashMap<String, 
 
     let node = match node_for_token(&app.cfg.db_path, token) {
         Some(n) => n,
-        None => return (401, json!({"ok": false, "error": "unknown or missing token"})),
+        // Unpairing is permanent, so this is the message a machine shows after its head stopped
+        // acting as head: say what to do about it, not just that the token was not recognised.
+        None => {
+            return (
+                401,
+                json!({
+                    "ok": false,
+                    "error": "unknown token: this head has no enrolment for it.                               Enrol this machine again with `observer-frog enrol`."
+                }),
+            )
+        }
     };
 
     let report = match parse(body) {
