@@ -43,6 +43,11 @@ pub struct App {
     pub last_wave_error: Arc<Mutex<Option<String>>>,
     pub notifier: Mutex<Option<crate::notify::Notifier>>,
     pub poll_interval: u64,
+    /// Reports this node sent upstream, and the last reason one failed. Zero counters on a pure
+    /// head, which is how `status` distinguishes "not configured to report" from "reporting badly".
+    pub reports_ok: Arc<std::sync::atomic::AtomicU64>,
+    pub reports_failed: Arc<std::sync::atomic::AtomicU64>,
+    pub last_report_error: Arc<Mutex<Option<String>>>,
 }
 
 impl App {
@@ -60,6 +65,9 @@ impl App {
             last_wave_error: Arc::new(Mutex::new(None)),
             notifier: Mutex::new(None),
             poll_interval,
+            reports_ok: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            reports_failed: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            last_report_error: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -661,6 +669,79 @@ fn route(req: &Request, app: &Arc<App>) -> (u16, String, Vec<u8>, bool) {
         ("POST", _) if normalized == "/api/report" => {
             let (code, payload) = crate::ingest::handle_report(app, &req.headers, &req.body, req.declared_len);
             (code, json_ct, json_bytes(&payload), false)
+        }
+        // ---- admin GUI (v0.3, no auth by design; loopback by default) ----
+        ("GET" | "HEAD", _) if normalized == "/api/settings" => {
+            // Read the file, not the boot-time config: the GUI's whole job is to change this file,
+            // so reporting the values the process started with would show a switch that never
+            // moves. The runtime itself picks the change up through its mtime watcher.
+            let cfg = crate::config::load(Some(&crate::settings::target(&app.cfg)))
+                .unwrap_or_else(|_| app.cfg.clone());
+            let role = match (cfg.serve, cfg.report_to.is_some()) {
+                (true, true) => "head + tail",
+                (true, false) => "head",
+                (false, true) => "tail",
+                (false, false) => "idle",
+            };
+            let autostart = crate::install::is_installed(&cfg);
+            (200, json_ct, json_bytes(&json!({
+                "ok": true,
+                "role": role,
+                "serve": cfg.serve,
+                "bind": cfg.bind,
+                "port": cfg.port,
+                "report_port": cfg.report_port,
+                "report_to": cfg.report_to,
+                "poll_interval": cfg.poll_interval,
+                "node_id": cfg.node_id,
+                "config_path": crate::settings::target(&cfg).display().to_string(),
+                "db_path": cfg.db_path.display().to_string(),
+                "autostart": autostart,
+                "autostart_supported": cfg!(target_os = "macos") || cfg!(target_os = "linux"),
+                "services": cfg.services.len(),
+            })), false)
+        }
+        ("POST", _) if normalized == "/api/settings" => {
+            if req.body.len() > MAX_BODY {
+                return (413, json_ct, json_bytes(&json!({"ok": false, "error": "body too large"})), false);
+            }
+            let body: Value = serde_json::from_slice(&req.body).unwrap_or(json!({}));
+            let path = crate::settings::target(&app.cfg);
+            match crate::settings::apply(&path, &body) {
+                Ok(changed) => (200, json_ct, json_bytes(&json!({
+                    "ok": true, "changed": changed, "path": path.display().to_string(),
+                })), false),
+                Err(e) => (500, json_ct, json_bytes(&json!({"ok": false, "error": e})), false),
+            }
+        }
+        ("GET" | "HEAD", _) if normalized == "/api/autostart" => {
+            let cfg = app.cfg.clone();
+            (200, json_ct, json_bytes(&json!({
+                "ok": true,
+                "enabled": crate::install::is_installed(&cfg),
+                "supported": cfg!(target_os = "macos") || cfg!(target_os = "linux"),
+            })), false)
+        }
+        ("POST", _) if normalized == "/api/autostart" => {
+            if req.body.len() > MAX_BODY {
+                return (413, json_ct, json_bytes(&json!({"ok": false, "error": "body too large"})), false);
+            }
+            let body: Value = serde_json::from_slice(&req.body).unwrap_or(json!({}));
+            let on = body.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false);
+            match crate::install::set_enabled(&app.cfg, on) {
+                Ok(msg) => (200, json_ct, json_bytes(&json!({
+                    "ok": true, "enabled": on, "detail": msg,
+                })), false),
+                Err(e) => (400, json_ct, json_bytes(&json!({"ok": false, "error": e})), false),
+            }
+        }
+        ("GET" | "HEAD", _) if normalized == "/api/heads" => {
+            // Pairing lives here rather than in a CLI flow: the settings page lists what answered.
+            let found = crate::lan::find_heads(std::time::Duration::from_millis(1500));
+            let heads: Vec<Value> = found.iter().map(|h| h.to_json()).collect();
+            (200, json_ct, json_bytes(&json!({
+                "ok": true, "found": heads.len(), "heads": heads,
+            })), false)
         }
         ("POST", _) if normalized == "/api/ignore" => {
             if req.body.len() > MAX_BODY {

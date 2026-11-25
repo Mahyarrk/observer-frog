@@ -90,6 +90,19 @@ pub fn run(cfg: Config, config_path: Option<PathBuf>, tls: Option<(PathBuf, Path
         println!("  tail reports on {scheme} {}:{rp}/api/report", cfg.bind);
     }
 
+    // A tail that has just been installed does not know this address, so advertise it. Binding the
+    // discovery port is not required for serving: a failure is logged and serving continues.
+    {
+        let name = cfg.node_name.clone();
+        let url = format!("{scheme}://{}:{}/", cfg.bind, port);
+        let report_port = report_bound;
+        let halt = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        std::thread::spawn(move || {
+            let version = env!("CARGO_PKG_VERSION").to_string();
+            crate::lan::serve_advertisement(name, url, report_port, version, halt);
+        });
+    }
+
     // Self-monitoring begins only now that the socket is bound (invariant I9).
     let p = Arc::new(poller::Poller::new());
     *poller_holder.lock().unwrap() = Some(Arc::clone(&p));
@@ -131,11 +144,25 @@ pub fn run(cfg: Config, config_path: Option<PathBuf>, tls: Option<(PathBuf, Path
                     Ok(changes) => {
                         app.waves.fetch_add(1, Ordering::Relaxed);
                         *app.last_wave_error.lock().unwrap() = None;
-                        app.set_snapshot(rows, ts);
+                        app.set_snapshot(rows.clone(), ts);
                         if !changes.is_empty() {
                             if let Some(n) = app.notifier.lock().unwrap().as_mut() {
                                 n.submit(&changes);
                                 n.flush(None);
+                            }
+                        }
+                        // One binary, both roles: this same wave is what gets reported. A separate
+                        // reporter thread would probe every service a second time for nothing.
+                        if let Some(head) = cfg_now.report_to.clone() {
+                            match crate::tail::report_once(&cfg_now, &head, &rows, ts) {
+                                Ok(_) => {
+                                    app.reports_ok.fetch_add(1, Ordering::Relaxed);
+                                }
+                                Err(e) => {
+                                    app.reports_failed.fetch_add(1, Ordering::Relaxed);
+                                    *app.last_report_error.lock().unwrap() = Some(e.clone());
+                                    log_line(&format!("report to {head} failed: {e}"));
+                                }
                             }
                         }
                     }

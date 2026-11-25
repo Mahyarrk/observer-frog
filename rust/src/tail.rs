@@ -54,6 +54,15 @@ pub fn build_report(cfg: &Config, rows: &[Value], observed_at: i64) -> Value {
     })
 }
 
+/// Probe once and report once, resolving the token from the configured environment variable.
+///
+/// Both roles use this: a pure tail from its own loop, and a head from inside its poll wave. That
+/// is the whole point of one binary — the reporting code is not a second program, it is a call.
+pub fn report_once(cfg: &Config, head: &str, rows: &[Value], observed_at: i64) -> Result<Value, String> {
+    let opts = TailOptions { report_to: head.to_string(), token: cfg.token()? };
+    post(&opts, &build_report(cfg, rows, observed_at))
+}
+
 /// Post one report. Returns the head's answer or a readable failure.
 pub fn post(opts: &TailOptions, body: &Value) -> Result<Value, String> {
     let base = opts.report_to.trim_end_matches('/');
@@ -192,6 +201,9 @@ mod tests {
             db_path: std::path::PathBuf::from("/tmp/of-tail-test.db"),
             discover: false,
             report_port: None,
+            report_to: None,
+            token_env: String::new(),
+            token_file: None,
             services,
             sinks: vec![],
         }

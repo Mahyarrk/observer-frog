@@ -406,6 +406,60 @@
 
     .view-hidden { display: none !important; }
 
+    /* ---- Settings (v0.3 admin GUI) ---- */
+    .settings-wrap { display: flex; flex-direction: column; gap: 14px; padding: 16px; }
+    .settings-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: 12px;
+      padding: 14px 16px;
+      display: flex; flex-direction: column; gap: 10px;
+    }
+    .settings-title {
+      font-size: 13px; font-weight: 600; margin: 0;
+      letter-spacing: .02em; color: var(--fg-base, inherit);
+    }
+    .settings-hint { font-size: 12px; opacity: .72; margin: 0; line-height: 1.5; }
+    .settings-note { font-size: 12px; opacity: .8; margin: 4px 0 0; }
+    .settings-warning {
+      margin: 0; padding: 10px 14px; border-radius: 10px; font-size: 12px; line-height: 1.5;
+      background: var(--down-bg); border: 1px solid var(--down-border); color: var(--down-color);
+    }
+    .settings-rows { display: flex; flex-direction: column; gap: 8px; }
+    .settings-row {
+      display: flex; justify-content: space-between; gap: 12px;
+      font-size: 12px; align-items: baseline;
+    }
+    .settings-row span { opacity: .65; }
+    .settings-row code { font-family: var(--font-mono); font-size: 11px; word-break: break-all; text-align: right; }
+    .settings-check { display: flex; align-items: center; gap: 9px; font-size: 13px; cursor: pointer; }
+    .settings-check input { width: 17px; height: 17px; accent-color: var(--accent-blue); cursor: pointer; }
+    .settings-field { display: flex; flex-direction: column; gap: 5px; font-size: 12px; }
+    .settings-field span { opacity: .65; }
+    .settings-field input {
+      font-family: var(--font-mono); font-size: 12px; padding: 8px 10px;
+      background: var(--bg-subtle); color: inherit;
+      border: 1px solid var(--border-subtle); border-radius: 8px;
+    }
+    .settings-field input:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: 1px; }
+    .settings-btn {
+      align-self: flex-start; font: inherit; font-size: 12px; font-weight: 600;
+      padding: 8px 14px; border-radius: 8px; cursor: pointer;
+      background: var(--bg-elevated); color: inherit;
+      border: 1px solid var(--border-subtle);
+    }
+    .settings-btn:hover { background: var(--bg-card-hover); }
+    .settings-btn:disabled { opacity: .5; cursor: default; }
+    .settings-heads { display: flex; flex-direction: column; gap: 8px; }
+    .settings-head {
+      display: flex; justify-content: space-between; align-items: center; gap: 10px;
+      padding: 10px 12px; border-radius: 9px;
+      background: var(--bg-subtle); border: 1px solid var(--border-subtle); font-size: 12px;
+    }
+    .settings-head-meta { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+    .settings-head-name { font-weight: 600; }
+    .settings-head-url { font-family: var(--font-mono); font-size: 11px; opacity: .7; word-break: break-all; }
+
     /* ---------- History (Archive) tab ---------- */
     .history-kpi-row {
       display: grid;
@@ -1689,6 +1743,10 @@
             <span>History</span>
             <span class="tab-badge" id="tab-badge-history">--</span>
           </button>
+          <button class="nav-tab-btn" id="tab-btn-settings" type="button">
+            <span>⚙️</span>
+            <span>Settings</span>
+          </button>
         </div>
         <div class="node-bar" id="node-bar" hidden>
           <label class="node-bar-label" for="node-select">NODE</label>
@@ -1739,6 +1797,71 @@
     </section>
 
     <!-- History tab: incident log + 30-day uptime (GET /api/history) -->
+    <section id="view-settings" class="view-hidden">
+      <div class="settings-wrap">
+        <p class="settings-warning" id="settings-warning" hidden>
+          This node is bound to a LAN address. Anyone who can reach it can reconfigure it —
+          there is no authentication in this version.
+        </p>
+
+        <div class="settings-card">
+          <h2 class="settings-title">This Node</h2>
+          <div class="settings-rows" id="settings-node-rows">
+            <div class="settings-row"><span>Role</span><strong id="set-role">—</strong></div>
+            <div class="settings-row"><span>Config file</span><code id="set-path">—</code></div>
+            <div class="settings-row"><span>Database</span><code id="set-db">—</code></div>
+          </div>
+        </div>
+
+        <div class="settings-card">
+          <h2 class="settings-title">Role</h2>
+          <p class="settings-hint">
+            One binary, either role. A head serves the dashboard; a tail probes this machine and
+            reports to a head. A node can do both.
+          </p>
+          <label class="settings-check">
+            <input type="checkbox" id="set-serve" />
+            <span>Serve the dashboard (head)</span>
+          </label>
+          <label class="settings-field">
+            <span>Report to a head (tail)</span>
+            <input type="text" id="set-report-to" placeholder="http://192.0.2.10:8771" />
+          </label>
+          <button class="settings-btn" id="set-save-role" type="button">Save role</button>
+        </div>
+
+        <div class="settings-card">
+          <h2 class="settings-title">Find a head on this network</h2>
+          <p class="settings-hint">
+            Any head on the same LAN answers a broadcast. Pick one to pair with it.
+          </p>
+          <button class="settings-btn" id="set-scan" type="button">Scan</button>
+          <div id="set-heads" class="settings-heads"></div>
+        </div>
+
+        <div class="settings-card">
+          <h2 class="settings-title">Polling</h2>
+          <label class="settings-field">
+            <span>Interval (seconds)</span>
+            <input type="number" id="set-interval" min="1" max="3600" />
+          </label>
+          <button class="settings-btn" id="set-save-interval" type="button">Save interval</button>
+        </div>
+
+        <div class="settings-card">
+          <h2 class="settings-title">Autostart</h2>
+          <p class="settings-hint" id="set-autostart-hint">
+            Starts this node at boot. The service definition is written by the binary itself.
+          </p>
+          <label class="settings-check">
+            <input type="checkbox" id="set-autostart" />
+            <span>Run at boot</span>
+          </label>
+          <p class="settings-note" id="set-autostart-note"></p>
+        </div>
+      </div>
+    </section>
+
     <section id="view-history" class="view-hidden">
       <div class="history-kpi-row">
         <div class="history-kpi">
@@ -1822,7 +1945,7 @@
       const API_BASE = (window.location.pathname.replace(/\/$/, '') || '');
       // Bump on every shell change. Declared before first use: a `const` referenced above its
       // declaration throws a TDZ error and takes the whole script down (it did).
-      const BUILD = 'of-7';
+      const BUILD = 'of-8';
       // Show the address actually in use, not a baked-in host.
       (function () {
         const el = document.getElementById('brand-url');
@@ -2582,6 +2705,130 @@
         });
       }
 
+      // ---------------- Settings tab (v0.3 admin GUI, no auth by design) ----------------
+      const elViewSettings = document.getElementById('view-settings');
+      const elTabSettings = document.getElementById('tab-btn-settings');
+
+      function settingsNote(msg) {
+        const el = document.getElementById('set-autostart-note');
+        if (el) el.textContent = msg || '';
+      }
+
+      async function loadSettings() {
+        let d;
+        try {
+          d = await (await fetch('api/settings', { cache: 'no-store' })).json();
+        } catch (_) { return; }
+        if (!d || !d.ok) return;
+        const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v ?? '—'; };
+        set('set-role', d.role);
+        set('set-path', d.config_path);
+        set('set-db', d.db_path);
+        const serve = document.getElementById('set-serve');
+        if (serve) serve.checked = !!d.serve;
+        const rt = document.getElementById('set-report-to');
+        if (rt) rt.value = d.report_to || '';
+        const iv = document.getElementById('set-interval');
+        if (iv) iv.value = d.poll_interval;
+        const auto = document.getElementById('set-autostart');
+        if (auto) {
+          auto.checked = !!d.autostart;
+          auto.disabled = !d.autostart_supported;
+        }
+        // The one place this version can genuinely bite: no auth on a LAN address.
+        const warn = document.getElementById('settings-warning');
+        if (warn) warn.hidden = !(d.bind && !/^(127\.|localhost|::1)/.test(d.bind));
+        const hint = document.getElementById('set-autostart-hint');
+        if (hint && !d.autostart_supported) {
+          hint.textContent = 'Autostart is implemented on macOS and Linux only.';
+        }
+      }
+
+      async function saveSettings(body, okMsg) {
+        try {
+          const r = await fetch('api/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          });
+          const d = await r.json();
+          if (!d.ok) { settingsNote(d.error || 'save failed'); return; }
+          settingsNote(okMsg + ' — applied on the next poll');
+          await loadSettings();
+        } catch (e) { settingsNote('save failed: ' + e); }
+      }
+
+      function initSettings() {
+        const on = (id, fn) => {
+          const el = document.getElementById(id);
+          if (el) el.addEventListener('click', fn);
+        };
+        on('set-save-role', () => saveSettings({
+          listen: document.getElementById('set-serve').checked,
+          report_to: document.getElementById('set-report-to').value.trim(),
+        }, 'role saved'));
+        on('set-save-interval', () => {
+          const v = parseInt(document.getElementById('set-interval').value, 10) || 30;
+          saveSettings({ poll_interval: v }, 'interval saved');
+        });
+        on('set-autostart', async () => {
+          const want = document.getElementById('set-autostart').checked;
+          try {
+            const r = await fetch('api/autostart', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ enabled: want }),
+            });
+            const d = await r.json();
+            if (!d.ok) {
+              settingsNote(d.error || 'could not change autostart');
+              await loadSettings();
+              return;
+            }
+            settingsNote(d.detail || (want ? 'autostart on' : 'autostart off'));
+          } catch (e) { settingsNote('could not change autostart: ' + e); }
+        });
+        on('set-scan', async () => {
+          const box = document.getElementById('set-heads');
+          if (box) box.textContent = 'scanning…';
+          try {
+            const d = await (await fetch('api/heads', { cache: 'no-store' })).json();
+            if (!box) return;
+            if (!d.found) { box.textContent = 'No heads answered on this network.'; return; }
+            box.textContent = '';
+            for (const h of d.heads) {
+              const card = document.createElement('div');
+              card.className = 'settings-head';
+              const meta = document.createElement('div');
+              meta.className = 'settings-head-meta';
+              const nm = document.createElement('span');
+              nm.className = 'settings-head-name';
+              nm.textContent = h.name || 'unnamed head';
+              const ur = document.createElement('span');
+              ur.className = 'settings-head-url';
+              ur.textContent = h.url + (h.report_port ? '  →  reports to ' + h.report_port : '');
+              meta.appendChild(nm); meta.appendChild(ur);
+              const btn = document.createElement('button');
+              btn.className = 'settings-btn';
+              btn.type = 'button';
+              btn.textContent = 'Pair';
+              btn.addEventListener('click', () => {
+                // Pairing writes the report target only; the token stays in its own file.
+                const target = document.getElementById('set-report-to');
+                if (target) target.value = h.url;
+                saveSettings({ report_to: h.url }, 'paired with ' + (h.name || h.url));
+              });
+              card.appendChild(meta); card.appendChild(btn);
+              box.appendChild(card);
+            }
+          } catch (e) {
+            if (box) box.textContent = 'scan failed: ' + e;
+          }
+        });
+        const live = document.getElementById('tab-btn-settings');
+        if (live) live.addEventListener('click', () => switchTab('settings'));
+      }
+
       // ---------------- History tab (incident log + 30-day uptime) ----------------
       const elViewLive = document.getElementById('view-live');
       const elViewHistory = document.getElementById('view-history');
@@ -2623,18 +2870,20 @@
       }
 
       function switchTab(tab) {
-        activeTab = tab === 'history' ? 'history' : 'live';
-        const isHistory = activeTab === 'history';
-        if (elViewLive) elViewLive.classList.toggle('view-hidden', isHistory);
-        if (elViewHistory) elViewHistory.classList.toggle('view-hidden', !isHistory);
-        if (elTabLive) elTabLive.classList.toggle('active', !isHistory);
-        if (elTabHistory) elTabHistory.classList.toggle('active', isHistory);
-        if (isHistory) {
+        activeTab = (tab === 'history' || tab === 'settings') ? tab : 'live';
+        const views = { live: elViewLive, history: elViewHistory, settings: elViewSettings };
+        const tabs = { live: elTabLive, history: elTabHistory, settings: elTabSettings };
+        for (const name of ['live', 'history', 'settings']) {
+          if (views[name]) views[name].classList.toggle('view-hidden', name !== activeTab);
+          if (tabs[name]) tabs[name].classList.toggle('active', name === activeTab);
+        }
+        if (activeTab === 'history') {
           renderHistory();
           if (!historyData || !historyData.generated || (Date.now() / 1000 - historyData.generated) > 60) {
             fetchHistory(true);
           }
         }
+        if (activeTab === 'settings') loadSettings();
         try { localStorage.setItem(ACTIVE_TAB_KEY, activeTab); } catch (_) {}
       }
 
@@ -2750,6 +2999,7 @@
 
       if (elTabLive) elTabLive.addEventListener('click', () => switchTab('live'));
       if (elTabHistory) elTabHistory.addEventListener('click', () => switchTab('history'));
+      initSettings();
       if (elHistorySearch) elHistorySearch.addEventListener('input', () => renderHistory());
       const elHistoryReload = document.getElementById('history-reload');
       if (elHistoryReload) elHistoryReload.addEventListener('click', () => fetchHistory(true));

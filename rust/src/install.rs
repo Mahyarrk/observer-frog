@@ -1,0 +1,325 @@
+//! Install and autostart: the binary owns its own service definition.
+//!
+//! A user should not be hand-writing launchd plists or systemd units, and neither should the
+//! operator of this repo. The templates live here, embedded, so a single downloaded binary
+//! carries everything it needs to become a service on the machine it lands on.
+//!
+//! Two roles, two unit names (`-head`, `-tail`): a machine can autostart either, or both.
+//!
+//! Windows is not supported here. The metrics and config paths already know about Windows, but
+//! claiming a Task Scheduler integration we have never run is worse than saying plainly that
+//! autostart is macOS and Linux only.
+
+use crate::config;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+/// macOS: a per-user LaunchAgent. No root, survives reboot, starts at login.
+const LAUNCHD: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>{label}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>{binary}</string>
+    <string>--config</string>
+    <string>{config}</string>
+    <string>serve</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>{log}</string>
+  <key>StandardErrorPath</key><string>{log}</string>
+</dict>
+</plist>
+"#;
+
+/// Linux: a user unit. `WantedBy=default.target` is what makes it start without a login shell
+/// only once lingering is enabled; the installer says so rather than pretending otherwise.
+const SYSTEMD: &str = r#"[Unit]
+Description=observer-frog ({role})
+After=network-online.target
+
+[Service]
+ExecStart={binary} --config {config} serve
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+"#;
+
+pub struct Plan {
+    pub binary: PathBuf,
+    pub config_path: PathBuf,
+    pub unit_path: PathBuf,
+    pub log_path: PathBuf,
+    pub role: String,
+}
+
+pub fn role_of(cfg: &config::Config) -> String {
+    if cfg.serve {
+        "head".to_string()
+    } else {
+        "tail".to_string()
+    }
+}
+
+/// Where the stable copy of the binary goes.
+///
+/// A unit that points at `target/release/` breaks the first time someone runs `cargo clean`, so
+/// the installer copies the binary somewhere durable and points the unit there instead.
+pub fn install_dir() -> PathBuf {
+    config::state_home()
+}
+
+pub fn stable_binary() -> PathBuf {
+    install_dir().join(if cfg_is_windows() { "observer-frog.exe" } else { "observer-frog" })
+}
+
+fn cfg_is_windows() -> bool {
+    cfg!(windows)
+}
+
+pub fn unit_path(role: &str) -> Result<PathBuf, String> {
+    if cfg!(target_os = "macos") {
+        let home = std::env::var("HOME").map_err(|_| "HOME is not set".to_string())?;
+        Ok(PathBuf::from(home)
+            .join("Library/LaunchAgents")
+            .join(format!("dev.observerfrog.{role}.plist")))
+    } else if cfg!(target_os = "linux") {
+        let home = std::env::var("HOME").map_err(|_| "HOME is not set".to_string())?;
+        Ok(PathBuf::from(home)
+            .join(".config/systemd/user")
+            .join(format!("observer-frog-{role}.service")))
+    } else {
+        Err(format!(
+            "autostart is not implemented on {}; macOS and Linux only",
+            std::env::consts::OS
+        ))
+    }
+}
+
+/// Render the unit for this platform. Pure, so it can be asserted on without touching the system.
+pub fn render(role: &str, binary: &Path, config_path: &Path, log_path: &Path) -> Result<String, String> {
+    if cfg!(target_os = "macos") {
+        Ok(LAUNCHD
+            .replace("{label}", &format!("dev.observerfrog.{role}"))
+            .replace("{binary}", &binary.display().to_string())
+            .replace("{config}", &config_path.display().to_string())
+            .replace("{log}", &log_path.display().to_string()))
+    } else if cfg!(target_os = "linux") {
+        Ok(SYSTEMD
+            .replace("{role}", role)
+            .replace("{binary}", &binary.display().to_string())
+            .replace("{config}", &config_path.display().to_string()))
+    } else {
+        Err(format!("autostart is not implemented on {}", std::env::consts::OS))
+    }
+}
+
+/// `observer-frog install`: make this machine run this binary at boot.
+pub fn install(cfg: &config::Config, config_path: Option<&Path>) -> i32 {
+    let role = role_of(cfg);
+    let binary = stable_binary();
+    let config_path = match config_path {
+        Some(p) => p.to_path_buf(),
+        None => config::default_path(),
+    };
+    let log_path = install_dir().join(format!("{role}.log"));
+
+    if !config_path.exists() {
+        eprintln!("no config at {}", config_path.display());
+        eprintln!("start the binary once (it writes defaults) or pass --config");
+        return 1;
+    }
+    if let Err(e) = fs::create_dir_all(install_dir()) {
+        eprintln!("cannot create {}: {e}", install_dir().display());
+        return 1;
+    }
+
+    // Copy the running binary to a stable path before writing a unit that points at it.
+    let self_path = std::env::current_exe().unwrap_or_default();
+    if self_path != binary {
+        if let Err(e) = fs::copy(&self_path, &binary) {
+            eprintln!("cannot copy {} to {}: {e}", self_path.display(), binary.display());
+            return 1;
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&binary, fs::Permissions::from_mode(0o755));
+        }
+    }
+
+    let unit = match unit_path(&role) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("{e}");
+            return 2;
+        }
+    };
+    let body = match render(&role, &binary, &config_path, &log_path) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("{e}");
+            return 2;
+        }
+    };
+    if let Some(dir) = unit.parent() {
+        if let Err(e) = fs::create_dir_all(dir) {
+            eprintln!("cannot create {}: {e}", dir.display());
+            return 1;
+        }
+    }
+    if let Err(e) = fs::write(&unit, body) {
+        eprintln!("cannot write {}: {e}", unit.display());
+        return 1;
+    }
+
+    // The token must survive a reboot, and a service has no shell to read it from.
+    if let Some(p) = &cfg.token_file {
+        if let Ok(meta) = fs::metadata(p) {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mode = meta.permissions().mode() & 0o777;
+                if mode & 0o077 != 0 {
+                    eprintln!("warning: token_file {} is mode {:o}; tighten it to 600", p.display(), mode);
+                }
+            }
+        } else {
+            eprintln!("warning: token_file {} does not exist yet", p.display());
+        }
+    }
+
+    println!("installed as {} ({role})", unit.display());
+    println!("  binary {}", binary.display());
+    println!("  config {}", config_path.display());
+    if cfg!(target_os = "macos") {
+        println!("  start it now with: launchctl load -w {}", unit.display());
+    } else {
+        println!("  start it now with: systemctl --user daemon-reload && systemctl --user enable --now {}", unit.file_name().and_then(|n| n.to_str()).unwrap_or("observer-frog"));
+        println!("  to start at boot without logging in: loginctl enable-linger $USER");
+    }
+    println!("  autostart is on; `uninstall` removes it");
+    0
+}
+
+/// `observer-frog uninstall`: stop being a service. Idempotent.
+pub fn uninstall(cfg: &config::Config) -> i32 {
+    let role = role_of(cfg);
+    let unit = match unit_path(&role) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("{e}");
+            return 2;
+        }
+    };
+    let mut removed_any = false;
+    if unit.exists() {
+        if cfg!(target_os = "macos") {
+            let _ = std::process::Command::new("launchctl")
+                .args(["unload", "-w"])
+                .arg(&unit)
+                .output();
+        } else {
+            let name = unit.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();
+            let _ = std::process::Command::new("systemctl")
+                .args(["--user", "disable", "--now", &name])
+                .output();
+        }
+        match fs::remove_file(&unit) {
+            Ok(_) => {
+                println!("removed {}", unit.display());
+                removed_any = true;
+            }
+            Err(e) => {
+                eprintln!("cannot remove {}: {e}", unit.display());
+                return 1;
+            }
+        }
+    }
+    if !removed_any {
+        println!("nothing installed for role {role}; nothing to remove");
+    }
+    println!("autostart is off");
+    0
+}
+
+/// `observer-frog autostart`: report it, so the GUI has something honest to poll.
+pub fn is_installed(cfg: &config::Config) -> bool {
+    unit_path(&role_of(cfg)).map(|p| p.exists()).unwrap_or(false)
+}
+
+/// Turn the installed unit on or off without rewriting it.
+///
+/// This is what the admin GUI's autostart switch calls: `install` and `uninstall` create and
+/// remove the unit and are CLI-only, but flipping it is a switch and belongs in the browser.
+pub fn set_enabled(cfg: &config::Config, on: bool) -> Result<String, String> {
+    let unit = unit_path(&role_of(cfg))?;
+    if !unit.exists() {
+        return Err(format!(
+            "not installed ({}) — run `observer-frog install` once from a shell",
+            unit.display()
+        ));
+    }
+    let out = if cfg!(target_os = "macos") {
+        std::process::Command::new("launchctl")
+            .args([if on { "load" } else { "unload" }, "-w"])
+            .arg(&unit)
+            .output()
+    } else {
+        let name = unit.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();
+        std::process::Command::new("systemctl")
+            .args(["--user", if on { "enable" } else { "disable" }, "--now", &name])
+            .output()
+    };
+    match out {
+        Ok(o) if o.status.success() => Ok(format!("autostart {}", if on { "on" } else { "off" })),
+        Ok(o) => Err(String::from_utf8_lossy(&o.stderr).trim().to_string()),
+        Err(e) => Err(format!("cannot run the platform service tool: {e}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_unit_names_the_binary_and_the_config() {
+        let body = render("head", Path::new("/opt/of"), Path::new("/etc/of.toml"), Path::new("/tmp/of.log"))
+            .expect("this platform is supported");
+        assert!(body.contains("/opt/of"), "the unit must point at the binary: {body}");
+        assert!(body.contains("/etc/of.toml"), "the unit must point at the config: {body}");
+    }
+
+    #[test]
+    fn the_two_roles_get_different_unit_names() {
+        assert_ne!(unit_path("head").unwrap(), unit_path("tail").unwrap());
+    }
+
+    #[test]
+    fn the_role_follows_serving_not_a_command_name() {
+        let cfg = |serve: bool| config::Config {
+            path: None,
+            node_id: "t".into(),
+            node_name: String::new(),
+            serve,
+            bind: "127.0.0.1".into(),
+            port: 8770,
+            poll_interval: 30,
+            db_path: PathBuf::from("/tmp/of-install-test.db"),
+            discover: false,
+            report_port: None,
+            report_to: None,
+            token_env: String::new(),
+            token_file: None,
+            services: vec![],
+            sinks: vec![],
+        };
+        assert_eq!(role_of(&cfg(true)), "head");
+        assert_eq!(role_of(&cfg(false)), "tail");
+    }
+}

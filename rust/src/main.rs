@@ -54,6 +54,8 @@ fn run(args: &[String]) -> i32 {
         Some("metrics") => cmd_metrics(&cfg),
         Some("enrol") => cmd_enrol(&cfg, args),
         Some("report") => cmd_report(&cfg, args),
+        Some("install") => observer_frog::install::install(&cfg, config_path.as_deref()),
+        Some("uninstall") => observer_frog::install::uninstall(&cfg),
         Some("serve") | None => cmd_serve(&cfg, args, config_path),
         Some("status") => cmd_status(&cfg),
         Some(other) => {
@@ -82,8 +84,11 @@ commands:
   add        print the config block for a catalog service
   metrics    print this machine's status line (no server)
   enrol      register a node and its token (token from env, never the config)
-  report     tail mode: probe this machine and post to a head
-  serve      start the dashboard (the default when no command is given)
+  install    run this binary at boot (LaunchAgent on macOS, user unit on Linux)
+  uninstall  stop running at boot, and remove the unit
+  report     one-shot: probe this machine and post to a head
+  serve      serve, report, or both — decided by `serve` and `report_to` in the config
+               (the default when no command is given)
 
 serve options:
   --bind ADDR       address to bind (default 127.0.0.1)
@@ -106,6 +111,16 @@ fn cmd_status(cfg: &config::Config) -> i32 {
         println!("  {:<24} {:<9} {}", s.id, s.probe, s.target);
     }
     println!("sinks       {}", if cfg.sinks.is_empty() { "none".to_string() } else { cfg.sinks.len().to_string() });
+    if let Some(rp) = cfg.report_port {
+        println!("reports in  {}:{}", cfg.bind, rp);
+    }
+    if let Some(rt) = &cfg.report_to {
+        match cfg.token() {
+            Ok(_) => println!("reports out {rt}  (token resolves)"),
+            Err(e) => println!("reports out {rt}  (cannot resolve the token: {e})"),
+        }
+    }
+    println!("autostart   {}", if observer_frog::install::is_installed(cfg) { "on" } else { "off" });
     0
 }
 
@@ -113,11 +128,25 @@ fn cmd_config(cfg: &config::Config) -> i32 {
     println!("{:<14} {}", "path", cfg.path.as_ref().map(|p| p.display().to_string()).unwrap_or_default());
     println!("{:<14} {}", "node_id", cfg.node_id);
     println!("{:<14} {}", "node_name", cfg.node_name);
+    // The role is what the two settings add up to, so print it rather than making the operator
+    // work it out from `serve` and `report_to`.
+    let role = match (cfg.serve, cfg.report_to.is_some()) {
+        (true, true) => "head + tail",
+        (true, false) => "head",
+        (false, true) => "tail",
+        (false, false) => "idle (nothing configured)",
+    };
+    println!("{:<14} {}", "role", role);
     println!("{:<14} {}", "serve", if cfg.serve { "True" } else { "False" });
     println!("{:<14} {}", "bind", cfg.bind);
     println!("{:<14} {}", "port", cfg.port);
+    println!("{:<14} {}", "report_port", cfg.report_port.map(|p| p.to_string()).unwrap_or_else(|| "-".into()));
+    println!("{:<14} {}", "report_to", cfg.report_to.clone().unwrap_or_else(|| "-".into()));
     println!("{:<14} {}", "poll_interval", cfg.poll_interval);
     println!("{:<14} {}", "db_path", cfg.db_path.display());
+    // Where this state actually lives. The whole reason v0.2 died in a power cut is that nobody
+    // could tell at a glance that both paths were under /tmp.
+    println!("{:<14} {}", "state_dir", config::state_home().display());
     0
 }
 
@@ -360,6 +389,31 @@ fn cmd_serve(cfg: &config::Config, args: &[String], config_path: Option<PathBuf>
             cfg.bind
         );
     }
+    // One binary, both roles. `serve = false` with a `report_to` means this process is a tail: it
+    // probes and reports, and binds nothing. That is the switchable behaviour the version is for.
+    if !cfg.serve {
+        match cfg.report_to.clone() {
+            Some(head) => {
+                let token = match cfg.token() {
+                    Ok(t) => t,
+                    Err(e) => {
+                        eprintln!("cannot run as a tail: {e}");
+                        return 2;
+                    }
+                };
+                observer_frog::runtime::init_logging(verbose);
+                let halt = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+                let opts = observer_frog::tail::TailOptions { report_to: head, token };
+                return observer_frog::tail::run(cfg, opts, halt);
+            }
+            None => {
+                eprintln!("serve = false and no report_to: this node has nothing to do.");
+                eprintln!("Set report_to to run as a tail, or serve = true to run as a head.");
+                return 2;
+            }
+        }
+    }
+
     if let Err(e) = db::init(&cfg.db_path) {
         eprintln!("cannot open database {}: {e}", cfg.db_path.display());
         return 1;

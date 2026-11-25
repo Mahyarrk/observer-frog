@@ -220,13 +220,22 @@ pub fn apply(app: &App, report: &Report, head_now: i64) -> rusqlite::Result<usiz
         // head_now stamps arrival (bucketing); report.observed_at is the idempotency key, so a
         // retried report cannot duplicate rows.
         let observed = if report.observed_at > 0 { Some(report.observed_at) } else { None };
-        crate::state::apply_wave_observed(
+        let changes = crate::state::apply_wave_observed(
             &app.cfg.db_path,
             &report.node_id,
             &rows,
             Some(head_now),
             observed,
         )?;
+        // A transition that arrives by report deserves the same message as one this head observed
+        // itself. Without this, a tail's outage and recovery were both silent: the notifier was
+        // wired only into the local poll wave, so a remote node could go down unannounced.
+        if !changes.is_empty() {
+            if let Some(n) = app.notifier.lock().unwrap().as_mut() {
+                n.submit(&changes);
+                n.flush(None);
+            }
+        }
     }
     Ok(count)
 }

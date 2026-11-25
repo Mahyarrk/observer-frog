@@ -68,6 +68,20 @@ pub struct Config {
     /// TLS. Running both at once is the normal case, and the config says so explicitly rather
     /// than making the operator choose.
     pub report_port: Option<u16>,
+    /// Where this node reports, e.g. `http://head:8771`. `None` means this process does not report.
+    ///
+    /// One binary is both roles: serving and reporting are independent settings, so a node can do
+    /// both, either, or neither. This replaced the `report --to` CLI flag, which could only ever
+    /// make a process do the second thing.
+    pub report_to: Option<String>,
+    /// Name of the environment variable holding this node's token. Never the token itself: a
+    /// config file with a secret in it is a config file that gets committed.
+    pub token_env: String,
+    /// Path to a file holding the token, for when there is no shell to put it in an environment.
+    ///
+    /// A launchd or systemd service gets no login environment, so `token_env` cannot work
+    /// unattended. The file must be mode 600; installation warns if it is not.
+    pub token_file: Option<PathBuf>,
     pub services: Vec<Service>,
     pub sinks: Vec<Sink>,
 }
@@ -75,6 +89,30 @@ pub struct Config {
 impl Config {
     pub fn service_ids(&self) -> HashSet<&str> {
         self.services.iter().map(|s| s.id.as_str()).collect()
+    }
+
+    /// Resolve this node's token, or say precisely why it cannot be resolved.
+    ///
+    /// One resolver for both roles: a head and a tail that disagreed about where the token lives
+    /// would be a config that authenticates on one machine and not the other. The file wins when
+    /// both are set, because the file is the only thing that works without a shell.
+    pub fn token(&self) -> Result<String, String> {
+        if let Some(p) = &self.token_file {
+            let text = fs::read_to_string(p)
+                .map_err(|e| format!("cannot read token_file {}: {e}", p.display()))?;
+            let t = text.trim().to_string();
+            if t.is_empty() {
+                return Err(format!("token_file {} is empty", p.display()));
+            }
+            return Ok(t);
+        }
+        if self.token_env.trim().is_empty() {
+            return Err("neither token_file nor token_env is configured".into());
+        }
+        match std::env::var(self.token_env.trim()) {
+            Ok(t) if !t.trim().is_empty() => Ok(t.trim().to_string()),
+            _ => Err(format!("environment variable {} is unset or empty", self.token_env.trim())),
+        }
     }
 }
 
@@ -319,6 +357,35 @@ pub fn load(path: Option<&Path>) -> Result<Config, ConfigError> {
         _ => default_db_path(),
     };
 
+    // A node that reports to itself would double-count its own samples and never show its own
+    // local view, so refuse it here rather than loop at runtime.
+    let report_to = match str_of(raw.get("report_to")) {
+        s if s.trim().is_empty() => None,
+        s => {
+            let addr = s.trim().trim_end_matches('/').to_string();
+            let self_port = int_of(serve_cfg.and_then(|t| t.get("report_port")))
+                .max(int_of(serve_cfg.and_then(|t| t.get("port"))));
+            let points_at_self = addr
+                .rsplit(':')
+                .next()
+                .and_then(|p| p.parse::<u16>().ok())
+                .map(|p| self_port > 0 && p as i64 == self_port)
+                .unwrap_or(false)
+                && (addr.contains("127.0.0.1") || addr.contains("localhost") || addr.contains("0.0.0.0"));
+            if points_at_self {
+                return Err(ConfigError(format!(
+                    "{where_}: report_to {addr} points at this node's own port; a node cannot report to itself"
+                )));
+            }
+            Some(addr)
+        }
+    };
+    let token_env = str_of(raw.get("token_env")).trim().to_string();
+    let token_file = match str_of(raw.get("token_file")).trim() {
+        "" => None,
+        s => Some(PathBuf::from(s)),
+    };
+
     Ok(Config {
         path: if exists { Some(p) } else { None },
         node_id,
@@ -342,6 +409,9 @@ pub fn load(path: Option<&Path>) -> Result<Config, ConfigError> {
         db_path,
         discover,
         report_port,
+        report_to,
+        token_env,
+        token_file,
         services,
         sinks,
     })

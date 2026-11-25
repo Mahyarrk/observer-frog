@@ -221,6 +221,22 @@ pub fn init(path: &Path) -> rusqlite::Result<i64> {
                 )?;
                 version = 5;
             }
+            if version < 6 {
+                let has: bool = conn
+                    .query_row(
+                        "SELECT 1 FROM pragma_table_info('nodes') WHERE name='metrics_json'",
+                        [],
+                        |_| Ok(true),
+                    )
+                    .unwrap_or(false);
+                if !has {
+                    conn.execute(
+                        "ALTER TABLE nodes ADD COLUMN metrics_json TEXT NOT NULL DEFAULT ''",
+                        [],
+                    )?;
+                }
+                version = 6;
+            }
             if version < 7 {
                 // Where a service listens is a fact the tail knows and the head does not, so it
                 // has to be stored rather than recomputed.
@@ -240,22 +256,6 @@ pub fn init(path: &Path) -> rusqlite::Result<i64> {
                     }
                 }
                 version = 7;
-            }
-            if version < 6 {
-                let has: bool = conn
-                    .query_row(
-                        "SELECT 1 FROM pragma_table_info('nodes') WHERE name='metrics_json'",
-                        [],
-                        |_| Ok(true),
-                    )
-                    .unwrap_or(false);
-                if !has {
-                    conn.execute(
-                        "ALTER TABLE nodes ADD COLUMN metrics_json TEXT NOT NULL DEFAULT ''",
-                        [],
-                    )?;
-                }
-                version = 6;
             }
             conn.execute(
                 "UPDATE schema_version SET version = ?, applied_ts = ?",
@@ -307,6 +307,78 @@ pub fn ignored_ids(path: &Path, node_id: &str) -> rusqlite::Result<Vec<String>> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_column_survives_the_whole_ladder() {
+        // The bug this exists for: the migration blocks were ordered 5, 7, 6, so a v5 database ran
+        // the v7 step, recorded version 7, and then skipped the v6 step for ever — a database that
+        // claimed to be current while missing a column the code writes to. Build a v5 database and
+        // climb, then assert on every column the schema promises.
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("v5.db");
+        {
+            // Build a v5 database directly: the v4 columns are there, the v6 and v7 ones are not.
+            let conn = connect(&db).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE schema_version (version INTEGER PRIMARY KEY, applied_ts INTEGER NOT NULL DEFAULT 0);
+                 CREATE TABLE nodes (
+                    node_id TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '',
+                    interval_s INTEGER NOT NULL DEFAULT 30, token_sha256 TEXT NOT NULL DEFAULT '',
+                    first_seen_ts INTEGER NOT NULL DEFAULT 0, last_seen_ts INTEGER NOT NULL DEFAULT 0,
+                    reported_name TEXT NOT NULL DEFAULT '', display_name TEXT NOT NULL DEFAULT '');
+                 CREATE TABLE service_state (
+                    node_id TEXT NOT NULL, service_id TEXT NOT NULL, name TEXT NOT NULL DEFAULT '',
+                    \"group\" TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT '',
+                    detail TEXT NOT NULL DEFAULT '', latency_ms INTEGER NOT NULL DEFAULT 0,
+                    timestamp INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (node_id, service_id));
+                 CREATE TABLE service_checks (
+                    node_id TEXT NOT NULL, service_id TEXT NOT NULL, status TEXT NOT NULL DEFAULT '',
+                    timestamp INTEGER NOT NULL DEFAULT 0, observed_at INTEGER NOT NULL DEFAULT 0);
+                 CREATE TABLE ignored (node_id TEXT NOT NULL, service_id TEXT NOT NULL,
+                    PRIMARY KEY (node_id, service_id));
+                 INSERT INTO schema_version (version, applied_ts) VALUES (5, 0);",
+            )
+            .unwrap();
+        }
+        let v = init(&db).unwrap();
+        assert_eq!(v, SCHEMA_VERSION, "the ladder must land on the current version");
+        let conn = connect(&db).unwrap();
+        for (t, c) in [
+            ("nodes", "reported_name"),
+            ("nodes", "display_name"),
+            ("nodes", "metrics_json"),
+            ("service_state", "ports"),
+            ("service_state", "addr"),
+        ] {
+            let has: bool = conn
+                .query_row(
+                    &format!("SELECT 1 FROM pragma_table_info('{t}') WHERE name='{c}'"),
+                    [],
+                    |_| Ok(true),
+                )
+                .unwrap_or(false);
+            assert!(has, "version {v} on disk but {t}.{c} was never added");
+        }
+    }
+
+    #[test]
+    fn the_migration_ladder_ascends() {
+        // A ladder that visits versions out of order silently skips steps; assert the source does.
+        let src = include_str!("db.rs");
+        let mut seen: Vec<i64> = Vec::new();
+        for part in src.split("if version < ").skip(1) {
+            if let Some(n) = part.split(|c: char| !c.is_ascii_digit()).next() {
+                if let Ok(v) = n.parse::<i64>() {
+                    if !seen.contains(&v) {
+                        seen.push(v);
+                    }
+                }
+            }
+        }
+        let mut ascending = seen.clone();
+        ascending.sort_unstable();
+        assert_eq!(seen, ascending, "migration steps are out of order: {seen:?}");
+    }
 
     #[test]
     fn init_is_idempotent_and_reports_the_current_version() {
