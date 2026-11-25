@@ -93,6 +93,33 @@ impl Snapshot {
         self.rows.len()
     }
 
+    /// RSS (MB) for the single process whose executable name is `needle`, or `None` if the name is
+    /// ambiguous.
+    ///
+    /// This is the unprivileged fallback for Linux, where `ss` hides `pid=` from a non-root caller
+    /// so a port cannot be resolved to a PID at all. The rule is deliberately strict: an executable
+    /// name that matches exactly one process is that service; a name matching several (`node`,
+    /// `python3`) is refused rather than summed into a plausible-looking wrong number.
+    pub fn rss_for_unique(&self, needle: &str) -> Option<f64> {
+        let needle = needle.trim().to_lowercase();
+        if needle.is_empty() {
+            return None;
+        }
+        let matched: Vec<&Proc> = self
+            .rows
+            .iter()
+            .filter(|r| {
+                let exe = r.cmd.split_whitespace().next().unwrap_or("");
+                let name = exe.rsplit('/').next().unwrap_or(exe).to_lowercase();
+                name == needle || name.trim_end_matches("-server") == needle
+            })
+            .collect();
+        match matched.len() {
+            1 => Some(matched[0].rss_mb),
+            _ => None,
+        }
+    }
+
     /// Total RSS (MB) for every process whose command line mentions `needle`, summed.
     ///
     /// Summing is deliberate: Syncthing runs two processes, and reporting one would understate it.
@@ -200,6 +227,7 @@ pub fn sample(services: &[Service], snapshot: Option<&Snapshot>) -> Vec<serde_js
                             .parse::<u16>()
                             .ok()
                             .and_then(|p| snap.rss_for_port(p))
+                            .or_else(|| snap.rss_for_unique(&svc.id))
                             .unwrap_or(0.0);
                         (probes::run(svc), ram)
                     };
