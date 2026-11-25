@@ -180,6 +180,36 @@ pub fn render(role: &str, binary: &Path, config_path: &Path, log_path: &Path) ->
     }
 }
 
+/// The commands that make an installed unit actually run the binary on disk.
+///
+/// Pure and separate so a test can assert the shape without touching the real service manager.
+/// The property that matters: after `install` the process must be **restarted**, because the copy it
+/// was running has just been replaced. Enabling is not restarting, and the difference is a whole
+/// version of stale code silently serving.
+fn activation_argv(unit: &Path, role: &str) -> Vec<Vec<String>> {
+    if cfg!(target_os = "macos") {
+        let uid = std::process::Command::new("id")
+            .arg("-u")
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_string())
+            .unwrap_or_else(|| "501".into());
+        let _ = role;
+        vec![
+            vec!["launchctl".into(), "load".into(), "-w".into(), unit.display().to_string()],
+            vec!["launchctl".into(), "kickstart".into(), "-k".into(), format!("gui/{uid}/{LABEL}")],
+        ]
+    } else {
+        let name = unit.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();
+        vec![
+            vec!["systemctl".into(), "--user".into(), "daemon-reload".into()],
+            vec!["systemctl".into(), "--user".into(), "enable".into(), name.clone()],
+            vec!["systemctl".into(), "--user".into(), "restart".into(), name],
+        ]
+    }
+}
+
 /// `observer-frog install`: make this machine run this binary at boot.
 pub fn install(cfg: &config::Config, config_path: Option<&Path>) -> i32 {
     let role = role_of(cfg);
@@ -274,25 +304,19 @@ pub fn install(cfg: &config::Config, config_path: Option<&Path>) -> i32 {
     // Activate what was just written. Writing a unit is not installing it: without `enable` the
     // Linux unit never runs at boot, and without `load -w` the Mac plist sits in LaunchAgents
     // doing nothing. Both are cheap and idempotent.
-    let activation = if cfg!(target_os = "macos") {
-        std::process::Command::new("launchctl")
-            .arg("load")
-            .arg("-w")
-            .arg(&unit)
-            .output()
-    } else {
-        // Reload first so systemd sees the file, then enable and start it. Skipping the reload is
-        // what made a re-install print "unit changed on disk" on the next restart — a warning the
-        // user did nothing to cause and cannot act on.
-        let _ = std::process::Command::new("systemctl")
-            .args(["--user", "daemon-reload"])
-            .output();
-        let name = unit.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();
-        std::process::Command::new("systemctl")
-            .args(["--user", "enable", "--now", &name])
-            .output()
-    };
-    let activated = activation.map(|o| o.status.success()).unwrap_or(false);
+    // `install` is also how an upgrade lands, and it copies the new binary over the one the service
+    // is running. Enabling alone is a no-op on a service that is already up, so the old process
+    // kept running the old code while the file on disk changed — every upgrade needed a manual
+    // restart that nothing told the operator about. Reload, enable, then restart explicitly.
+    let mut activated = true;
+    for argv in activation_argv(&unit, &role) {
+        let Some((bin, rest)) = argv.split_first() else { continue };
+        if let Ok(o) = std::process::Command::new(bin).args(rest).output() {
+            // Only the final step decides success: `load` on an already-loaded job returns non-zero
+            // on some macOS versions, and that must not be reported as a failed install.
+            activated &= o.status.success();
+        }
+    }
 
     println!("installed as {} ({role})", unit.display());
     println!("  binary {}", binary.display());
@@ -480,6 +504,20 @@ mod tests {
             .expect("this platform is supported");
         assert!(body.contains("/opt/of"), "the unit must point at the binary: {body}");
         assert!(body.contains("/etc/of.toml"), "the unit must point at the config: {body}");
+    }
+
+    #[test]
+    fn installing_restarts_the_service_it_just_replaced() {
+        // The bug this guards: install copies a new binary over the one the service is running, and
+        // `enable` on an already-running service does nothing, so the old code kept serving while
+        // the file on disk moved on. Every upgrade needs an explicit restart.
+        let unit = unit_path("head").unwrap();
+        let argv = activation_argv(&unit, "head");
+        let flat: Vec<String> = argv.iter().map(|a| a.join(" ")).collect();
+        assert!(
+            flat.iter().any(|c| c.contains("restart") || c.contains("kickstart")),
+            "install must restart the service, got: {flat:?}"
+        );
     }
 
     #[test]
