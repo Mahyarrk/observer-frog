@@ -1,7 +1,18 @@
 #!/usr/bin/env python3
-"""Compare a Python observer-frog against a Rust observer-frog, endpoint by endpoint.
+"""Compare a Python observer-frog against the Rust build, endpoint by endpoint.
 
-Usage: python3 parity.py <python-url> <rust-url>
+The Python implementation left `main` and lives frozen on the `python-v0.1` branch. To run this
+you need both builds serving the same configuration:
+
+    git worktree add /tmp/py-v01 python-v0.1
+    cd /tmp/py-v01 && uv venv --python 3.12 && uv pip install -p .venv/bin/python psutil
+    .venv/bin/python -m statushub --config /path/to/config.toml serve --port 8800
+
+    ./target/release/observer-frog --config /path/to/config.toml serve --port 8770
+    python3 parity.py http://127.0.0.1:8800 http://127.0.0.1:8770
+
+Nothing here imports the Python code; it only compares HTTP responses, so it keeps working after
+Python leaves the main tree.
 
 Volatile fields (cpu, load, memory, uptime, network counters, latency) are excluded by design;
 everything else must match exactly, including key sets and value types.

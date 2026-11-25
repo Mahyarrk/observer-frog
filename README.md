@@ -135,11 +135,13 @@ surprise you. The catalog is a curated list, not a discovery engine.
 ## Tests
 
 ```bash
-cd rust && cargo test        # 34 tests
+cd rust && cargo test        # 36 tests
 ```
 
 Every behavioural rule in `docs/DESIGN.md` has a test named after it, and the tests exist because
-each rule was learned the hard way. The down-confirmation delay is there because every restart used
+each rule was learned the hard way. One test does not check behaviour at all: it runs a probe wave and
+fails if peak memory crosses 50 MB, because a small footprint is the reason this port exists and
+nothing else would notice a regression in it. The down-confirmation delay is there because every restart used
 to page me. The vanished-service rule is there because a dead remote node once left sixteen cards
 reading healthy for hours.
 
@@ -148,11 +150,12 @@ reading healthy for hours.
 The code was written by AI agents running in Hermes Agent, under my direction. I did not type it,
 and I am not going to imply otherwise.
 
-It began in Python, which is frozen on the `python-v0.1` branch. Rust replaced it for distribution:
-2.6 MB, against 48 MB for a single-file Python executable that antivirus software flags. Both builds
-are kept honest by `rust/parity.py`, which runs them against the same configuration and compares every
-endpoint, service state and response shape; they serve byte-identical web assets. Memory is 8 MB
-against 40.
+It began in Python. That original is frozen on the `python-v0.1` branch and no longer part of this
+tree. Rust replaced it for distribution: 2.6 MB, against 48 MB for a single-file Python executable
+that antivirus software flags. The port was verified rather than asserted, and `rust/parity.py` still
+does that comparison against the frozen branch: run both builds on the same configuration and it
+checks every endpoint, every service state and every response shape. They serve byte-identical web
+assets. Memory is 8 MB against 40.
 
 What I did was the part that decides whether the result is any good. I set the constraints: native
 install only, no container, one binary with independent `serve` and `report_to` flags instead of a
