@@ -10,4 +10,5 @@ pub mod poller;
 pub mod probes;
 pub mod runtime;
 pub mod server;
+pub mod silence;
 pub mod state;

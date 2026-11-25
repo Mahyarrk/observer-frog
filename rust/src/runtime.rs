@@ -4,6 +4,7 @@ use crate::config::{Config, Watcher};
 use crate::notify::Notifier;
 use crate::poller;
 use crate::server::{self, App};
+use crate::silence;
 use crate::state;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
@@ -19,6 +20,12 @@ pub fn init_logging(verbose: bool) {
 }
 
 static LOG_VERBOSE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Called when a node is marked silent. Kept as a function so the event is greppable and a test
+/// can assert it happened without scraping stdout.
+pub fn note_silence(node_id: &str, services: usize) {
+    log_line(&format!("node {node_id} silent: {services} service(s) unavailable"));
+}
 
 fn log_line(msg: &str) {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -68,6 +75,7 @@ pub fn run(cfg: Config, config_path: Option<PathBuf>, tls: Option<(PathBuf, Path
     let p = Arc::new(poller::Poller::new());
     *poller_holder.lock().unwrap() = Some(Arc::clone(&p));
 
+    let sweeper_halt = p.halt_flag();
     {
         let app = Arc::clone(&app);
         let watcher_holder = Arc::clone(&watcher_holder);
@@ -128,6 +136,38 @@ pub fn run(cfg: Config, config_path: Option<PathBuf>, tls: Option<(PathBuf, Path
                 let sleep_for = (interval as f64 - elapsed).max(0.0);
                 // Sleep in small slices so a stop request is honoured promptly.
                 let mut left = sleep_for;
+                while left > 0.0 && !halt.load(Ordering::SeqCst) {
+                    let slice = left.min(0.25);
+                    std::thread::sleep(Duration::from_secs_f64(slice));
+                    left -= slice;
+                }
+            }
+        });
+    }
+
+    // Silence sweeper: its own clock, because it must run even on a head that probes nothing.
+    {
+        let app = Arc::clone(&app);
+        let halt = Arc::clone(&sweeper_halt);
+        std::thread::spawn(move || {
+            // Sweep four times per shortest interval, floored at 5s, so detection lands within
+            // the grace window rather than a whole interval late.
+            let tick: f64 = 5.0;
+            while !halt.load(Ordering::SeqCst) {
+                let now = crate::db::now();
+                match silence::sweep(&app.cfg.db_path, now, &app.cfg.node_id) {
+                    Ok(swept) => {
+                        for (node_id, changes) in swept {
+                            crate::runtime::note_silence(&node_id, changes.len());
+                            if let Some(n) = app.notifier.lock().unwrap().as_mut() {
+                                n.submit(&changes);
+                                n.flush(None);
+                            }
+                        }
+                    }
+                    Err(e) => log_line(&format!("silence sweep failed: {e}")),
+                }
+                let mut left = tick;
                 while left > 0.0 && !halt.load(Ordering::SeqCst) {
                     let slice = left.min(0.25);
                     std::thread::sleep(Duration::from_secs_f64(slice));

@@ -252,8 +252,23 @@ fn advance(
             }));
         }
         if is_neutral(&prev.state) && is_healthy(&row.status) {
+            // A node that was silent and is reporting again. This is worth one message: the
+            // operator was told it went quiet, so they need to be told it came back.
             prev.state = row.status.clone();
             prev.since_ts = ts;
+            save_state(conn, node_id, &row.service_id, prev)?;
+            return Ok(Some(Change {
+                node_id: node_id.to_string(),
+                service_id: row.service_id.clone(),
+                name: row.name.clone(),
+                group: row.group.clone(),
+                from_state: "unavailable".into(),
+                to_state: row.status.clone(),
+                detail: row.detail.clone(),
+                ts,
+                ignored: flagged,
+                first_sighting: false,
+            }));
         }
         save_state(conn, node_id, &row.service_id, prev)?;
         return Ok(None);

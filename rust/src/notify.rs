@@ -13,6 +13,12 @@ pub const PRIORITY_RECOVERY: i32 = 2;
 pub const RATE_WINDOW_S: f64 = 60.0;
 pub const MAX_MESSAGES_PER_WINDOW: usize = 6;
 
+/// States that mean "the thing is answering". Mirrors `state::is_healthy`; kept local so the
+/// notifier does not depend on the state machine's internals.
+fn is_healthy_state(s: &str) -> bool {
+    s == "up" || s == "degraded"
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Event {
     pub title: String,
@@ -23,9 +29,57 @@ pub struct Event {
 }
 
 /// Turn state transitions into human messages. First sightings never page.
+///
+/// Silence is handled first and returns early for those changes: a node going quiet produces one
+/// transition per service, and paging seventeen times for one dropped wifi link is the behaviour
+/// this whole notification layer exists to prevent.
 pub fn events_from_changes(changes: &[Change], dashboard_url: &str) -> Vec<Event> {
     let mut events = Vec::new();
+
+    // A node that went silent: one message, naming the node and how many services.
+    let silent: Vec<&Change> = changes
+        .iter()
+        .filter(|c| c.to_state == "unavailable" && !c.first_sighting)
+        .collect();
+    if !silent.is_empty() {
+        let node = &silent[0].node_id;
+        let count = silent.len();
+        events.push(Event {
+            title: format!("node {node} stopped reporting"),
+            message: format!(
+                "{count} service(s) marked unavailable\nnode {node} · no report within {} intervals",
+                crate::silence::SILENCE_INTERVALS
+            ),
+            priority: PRIORITY_OUTAGE,
+            tags: vec!["grey_question".into(), node.clone()],
+            click: dashboard_url.to_string(),
+        });
+    }
+
+    // A node that came back: one message too.
+    let back: Vec<&Change> = changes
+        .iter()
+        .filter(|c| c.from_state == "unavailable" && is_healthy_state(&c.to_state))
+        .collect();
+    if !back.is_empty() {
+        let node = &back[0].node_id;
+        events.push(Event {
+            title: format!("node {node} is reporting again"),
+            message: format!("{} service(s) recovered on node {node}", back.len()),
+            priority: PRIORITY_RECOVERY,
+            tags: vec!["white_check_mark".into(), node.clone()],
+            click: dashboard_url.to_string(),
+        });
+    }
+
     for c in changes {
+        // These were turned into node-level messages above.
+        if is_healthy_state(&c.to_state) && c.from_state == "unavailable" {
+            continue;
+        }
+        if c.to_state == "unavailable" {
+            continue;
+        }
         if c.first_sighting {
             continue;
         }
@@ -323,6 +377,47 @@ mod tests {
         let ev2 = events_from_changes(&[change("a", "down", "up")], "http://d/");
         assert_eq!(ev2[0].title, "A recovered");
         assert_eq!(ev2[0].priority, PRIORITY_RECOVERY);
+    }
+
+    #[test]
+    fn a_silent_node_pages_once_not_once_per_service() {
+        // Seventeen services on one node going quiet is one event, not seventeen.
+        let changes: Vec<Change> = (0..17)
+            .map(|i| {
+                let mut c = change(&format!("svc{i}"), "up", "unavailable");
+                c.to_state = "unavailable".into();
+                c
+            })
+            .collect();
+        let events = events_from_changes(&changes, "");
+        assert_eq!(events.len(), 1, "silence must collapse to one message");
+        assert!(events[0].title.contains("stopped reporting"));
+        assert!(events[0].message.contains("17 service(s)"));
+    }
+
+    #[test]
+    fn a_returning_node_pages_once() {
+        let changes: Vec<Change> = (0..5)
+            .map(|i| {
+                let mut c = change(&format!("svc{i}"), "unavailable", "up");
+                c.from_state = "unavailable".into();
+                c
+            })
+            .collect();
+        let events = events_from_changes(&changes, "");
+        assert_eq!(events.len(), 1);
+        assert!(events[0].title.contains("reporting again"));
+    }
+
+    #[test]
+    fn silence_is_not_rendered_as_an_outage() {
+        // The whole point: a silent node is not a broken service.
+        let mut c = change("nginx", "up", "unavailable");
+        c.to_state = "unavailable".into();
+        let events = events_from_changes(&[c], "");
+        assert_eq!(events.len(), 1);
+        assert!(!events[0].title.contains("is down"), "silence must not read as an outage");
+        assert_eq!(events[0].tags[0], "grey_question");
     }
 
     #[test]
