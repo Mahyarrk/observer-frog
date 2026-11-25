@@ -66,6 +66,10 @@ pub struct ReportService {
     pub status: String,
     pub detail: String,
     pub latency_ms: i64,
+    /// Where the service actually listens, as the tail discovered or was told. The head cannot
+    /// work this out for another machine, so it must be carried rather than guessed.
+    pub ports: String,
+    pub address: String,
 }
 
 #[derive(Debug, Clone)]
@@ -120,6 +124,8 @@ pub fn parse(body: &[u8]) -> Result<Report, String> {
                     status,
                     detail: item.get("detail").and_then(|v| v.as_str()).unwrap_or("").to_string(),
                     latency_ms: item.get("latency_ms").and_then(|v| v.as_i64()).unwrap_or(0),
+                    ports: item.get("ports").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                    address: item.get("address").and_then(|v| v.as_str()).unwrap_or("").to_string(),
                 });
             }
             // Two rows for one id in a single report would fight over state; reject rather than
@@ -201,6 +207,8 @@ pub fn apply(app: &App, report: &Report, head_now: i64) -> rusqlite::Result<usiz
                 status: s.status.clone(),
                 detail: s.detail.clone(),
                 latency_ms: s.latency_ms,
+                ports: s.ports.clone(),
+                address: s.address.clone(),
             })
             .collect(),
         None => Vec::new(),

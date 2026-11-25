@@ -122,6 +122,8 @@ pub fn run(cfg: Config, config_path: Option<PathBuf>, tls: Option<(PathBuf, Path
                         status: r["status"].as_str().unwrap_or("down").to_string(),
                         detail: r["detail"].as_str().unwrap_or("").to_string(),
                         latency_ms: r["latency_ms"].as_i64().unwrap_or(0),
+                        ports: r["ports"].as_str().unwrap_or("").to_string(),
+                        address: r["address"].as_str().unwrap_or("").to_string(),
                     })
                     .collect();
 

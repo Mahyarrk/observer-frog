@@ -91,6 +91,8 @@ pub fn mark_node_silent(
             status: "unavailable".into(),
             detail: SILENT_DETAIL.into(),
             latency_ms: 0,
+            ports: prev.ports.clone(),
+            address: prev.address.clone(),
         };
         let mut next = prev.clone();
         next.state = "unavailable".into();
@@ -169,6 +171,7 @@ mod tests {
             status: status.into(),
             detail: "d".into(),
             latency_ms: 1,
+            ..Default::default()
         }
     }
 

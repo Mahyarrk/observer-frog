@@ -8,7 +8,7 @@ use rusqlite::{Connection, OpenFlags};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub const SCHEMA_VERSION: i64 = 6;
+pub const SCHEMA_VERSION: i64 = 7;
 pub const RAW_RETENTION_S: i64 = 86_400; // 24 h of per-check rows
 pub const ROLLUP_RETENTION_S: i64 = 2_592_000; // 30 days of hourly counters
 
@@ -30,6 +30,8 @@ CREATE TABLE IF NOT EXISTS service_checks (
 CREATE INDEX IF NOT EXISTS idx_checks_node_time ON service_checks (node_id, service_id, timestamp);
 
 CREATE TABLE IF NOT EXISTS service_state (
+    ports TEXT NOT NULL DEFAULT '',
+    addr  TEXT NOT NULL DEFAULT '', 
     node_id     TEXT    NOT NULL,
     service_id  TEXT    NOT NULL,
     state       TEXT    NOT NULL DEFAULT 'up',
@@ -218,6 +220,26 @@ pub fn init(path: &Path) -> rusqlite::Result<i64> {
                     [],
                 )?;
                 version = 5;
+            }
+            if version < 7 {
+                // Where a service listens is a fact the tail knows and the head does not, so it
+                // has to be stored rather than recomputed.
+                for col in ["ports", "addr"] {
+                    let has: bool = conn
+                        .query_row(
+                            &format!("SELECT 1 FROM pragma_table_info('service_state') WHERE name='{col}'"),
+                            [],
+                            |_| Ok(true),
+                        )
+                        .unwrap_or(false);
+                    if !has {
+                        conn.execute(
+                            &format!("ALTER TABLE service_state ADD COLUMN {col} TEXT NOT NULL DEFAULT ''"),
+                            [],
+                        )?;
+                    }
+                }
+                version = 7;
             }
             if version < 6 {
                 let has: bool = conn

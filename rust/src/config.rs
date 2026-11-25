@@ -159,6 +159,26 @@ fn tables<'a>(value: Option<&'a toml::Value>, field: &str, where_: &str) -> Resu
     }
 }
 
+/// The port a service listens on, read off its target when the config does not state it.
+///
+/// `ports` used to be free text nobody filled in, so every card showed no port. The target
+/// already carries it (`http://host:3009/`, `127.0.0.1:22`), so deriving it means a discovered
+/// service and a hand-written one both report the truth.
+pub fn port_of(target: &str) -> String {
+    let rest = match target.find("://") {
+        Some(i) => &target[i + 3..],
+        None => target,
+    };
+    let authority = rest.split('/').next().unwrap_or("");
+    if authority.starts_with('[') {
+        return authority.rsplit_once("]:").map(|(_, p)| p.to_string()).unwrap_or_default();
+    }
+    match authority.rsplit_once(':') {
+        Some((_, p)) if !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()) => p.to_string(),
+        _ => String::new(),
+    }
+}
+
 fn as_service(raw: &toml::Table, where_: &str) -> Result<Service, ConfigError> {
     let sid = str_of(raw.get("id")).trim().to_string();
     if sid.is_empty() {
@@ -183,6 +203,7 @@ fn as_service(raw: &toml::Table, where_: &str) -> Result<Service, ConfigError> {
         Some(v) => str_of(Some(v)),
         None => "Services".to_string(),
     };
+    let derived_port = port_of(&target);
     Ok(Service {
         id: sid,
         probe,
@@ -195,7 +216,10 @@ fn as_service(raw: &toml::Table, where_: &str) -> Result<Service, ConfigError> {
         field: str_of(raw.get("field")),
         max_age_s: int_of(raw.get("max_age_s")),
         timeout: float_of(raw.get("timeout")).unwrap_or(2.0),
-        ports: str_of(raw.get("ports")),
+        ports: {
+            let explicit = str_of(raw.get("ports"));
+            if explicit.is_empty() { derived_port } else { explicit }
+        },
     })
 }
 
