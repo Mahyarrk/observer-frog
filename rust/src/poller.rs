@@ -178,10 +178,17 @@ pub fn sample(services: &[Service], snapshot: Option<&Snapshot>) -> Vec<serde_js
                         // A listening service: resolve the PID that holds the port in this same
                         // wave and sum its RSS with its children's. Unresolvable stays 0.0 here and
                         // the UI renders it "—", because 0 reads as "using no memory".
-                        let ram = crate::config::port_of(&svc.target)
+                        // Resolve memory two ways, cheapest first. The port→PID route is exact but
+                        // needs elevation on Linux (`ss` hides pid= from unprivileged callers), so
+                        // fall back to matching the service's own name in the process table. Both
+                        // are honest: a miss yields None and the card shows "—", never "0 MB".
+                        let by_port = crate::config::port_of(&svc.target)
                             .parse::<u16>()
                             .ok()
-                            .and_then(|p| snap.rss_for_port(p))
+                            .and_then(|p| snap.rss_for_port(p));
+                        let ram = by_port
+                            .or_else(|| snap.rss_for(&svc.id))
+                            .or_else(|| snap.rss_for(svc.name.as_str()))
                             .unwrap_or(0.0);
                         (probes::run(svc), ram)
                     };
@@ -207,6 +214,8 @@ pub fn sample(services: &[Service], snapshot: Option<&Snapshot>) -> Vec<serde_js
             "ports": svc.ports,
             "address": svc.target,
         });
+        // Only a real measurement is published. Absence becomes "—" in the UI; a literal 0 would
+        // read as "this service uses no memory", which we have not measured and must not claim.
         if ram != 0.0 {
             row["ram_mb"] = serde_json::json!(ram);
         }
