@@ -931,6 +931,37 @@ fn route(req: &Request, app: &Arc<App>) -> (u16, String, Vec<u8>, bool) {
                 "ok": true, "found": heads.len(), "heads": heads,
             })), false)
         }
+        ("POST", _) if normalized == "/api/pair/ask" => {
+            // Pairing from the scanning side, in one call: write the head, then ask it. The GUI
+            // used to write the address and stop, leaving the request to a report loop that asks
+            // once per process lifetime — so a second Pair press after a rejection did nothing.
+            if req.body.len() > MAX_BODY {
+                return (413, json_ct, json_bytes(&json!({"ok": false, "error": "body too large"})), false);
+            }
+            let b: Value = serde_json::from_slice(&req.body).unwrap_or(json!({}));
+            let head = b.get("url").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+            if head.is_empty() {
+                return (400, json_ct, json_bytes(&json!({"ok": false, "error": "a head url is required"})), false);
+            }
+            if !head.starts_with("http://") && !head.starts_with("https://") {
+                return (400, json_ct, json_bytes(&json!({"ok": false, "error": "the head url must start with http:// or https://"})), false);
+            }
+            let path = crate::settings::target(&app.cfg);
+            if let Err(e) = crate::settings::apply(&path, &json!({ "report_to": head })) {
+                return (500, json_ct, json_bytes(&json!({"ok": false, "error": e})), false);
+            }
+            let live = crate::config::load(Some(&path)).unwrap_or_else(|_| app.cfg.clone());
+            let token = match live.token() {
+                Ok(t) => t,
+                Err(e) => return (400, json_ct, json_bytes(&json!({"ok": false, "error": e})), false),
+            };
+            match crate::pair::ask_head(&head, &live.node_id, &crate::config::hostname(), &token, live.poll_interval as i64) {
+                Ok(detail) => (200, json_ct, json_bytes(&json!({
+                    "ok": true, "paired_with": head, "detail": detail,
+                })), false),
+                Err(e) => (502, json_ct, json_bytes(&json!({"ok": false, "error": e})), false),
+            }
+        }
         ("POST", _) if normalized == "/api/pair" => {
             // A tail asks to join. Deliberately unauthenticated: the token it proposes is not a
             // credential yet, and requiring a secret to request one would be circular. Nothing

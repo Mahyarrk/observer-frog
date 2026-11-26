@@ -2099,7 +2099,7 @@
       const API_BASE = (window.location.pathname.replace(/\/$/, '') || '');
       // Bump on every shell change. Declared before first use: a `const` referenced above its
       // declaration throws a TDZ error and takes the whole script down (it did).
-      const BUILD = 'of-21';
+      const BUILD = 'of-22';
       // Show the address actually in use, not a baked-in host.
       (function () {
         const el = document.getElementById('brand-url');
@@ -3419,11 +3419,36 @@
               btn.className = 'settings-btn';
               btn.type = 'button';
               btn.textContent = 'Pair';
-              btn.addEventListener('click', () => {
-                // Pairing writes the report target only; the token stays in its own file.
-                const target = document.getElementById('set-report-to');
-                if (target) target.value = h.url;
-                saveSettings({ report_to: h.url }, 'paired with ' + (h.name || h.url));
+              if (!h.report_port) {
+                // Found, but not collecting: there is no report port to send to.
+                btn.textContent = 'not serving';
+                btn.disabled = true;
+                btn.title = 'this machine is not acting as head, so it cannot take reports';
+              }
+              btn.addEventListener('click', async () => {
+                if (!h.report_port) return;
+                // One call does both: write the head and send the request. Feedback goes on the
+                // button that was pressed — a note elsewhere on the card reads as a dead button.
+                const was = btn.textContent;
+                btn.disabled = true;
+                btn.textContent = 'pairing…';
+                try {
+                  // The head answers on its dashboard port; requests arrive on the report port.
+                  const askUrl = h.url.replace(/:\d+\/?$/, '') + ':' + (h.report_port || '');
+                  const r = await fetch('api/pair/ask', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url: h.report_port ? askUrl : h.url }),
+                  });
+                  const d = await r.json();
+                  btn.textContent = d.ok ? 'requested ✓' : 'failed ✕';
+                  btn.title = d.ok ? (d.detail || '') : (d.error || '');
+                } catch (e) {
+                  btn.textContent = 'failed ✕';
+                  btn.title = String(e);
+                } finally {
+                  setTimeout(() => { btn.textContent = was; btn.disabled = false; }, 2600);
+                  loadSettings();
+                }
               });
               card.appendChild(meta); card.appendChild(btn);
               box.appendChild(card);
