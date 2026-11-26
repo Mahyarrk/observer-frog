@@ -165,10 +165,10 @@ fn cmd_discover(entries: &[catalog::Entry]) -> i32 {
         }
         println!("\nAdd to a tail config with `discover = true`, or paste the blocks below:");
         for s in &found {
-            println!(
-                "\n[[service]]\nid = \"{}\"\nprobe = \"{}\"\ntarget = \"{}\"\nname = \"{}\"\ngroup = \"{}\"",
-                s.id, s.probe, s.target, s.name, s.group
-            );
+            // Render through the same function the add endpoint uses. Hand-formatting here meant
+            // any field the block carries but this format string did not know about — `iface` on
+            // WireGuard — was silently dropped from the block a user pastes.
+            println!("\n{}", observer_frog::catalog::to_toml(s));
         }
     }
 
