@@ -18,7 +18,7 @@ dependency, a moving part, or an attack surface needs a reason stronger than "it
 | 0.3 | Install and autostart on macOS and Linux, Settings GUI, service RAM on cards, silence and 413 gates |
 | 0.4 | Role switching as a live setting, pairing with operator approval, one stable unit name, service discovery and add-from-panel |
 
-0.4.0 is the current release. 109 tests, one source tree, macOS and Linux.
+0.4.0 is the current release. 108 tests, one source tree, macOS and Linux.
 
 ---
 
@@ -30,15 +30,22 @@ only item on the roadmap where doing nothing is an active exposure.
 
 ### Scope
 
-- **Operator authentication.** One password, argon2-hashed, session cookie (`HttpOnly`,
-  `SameSite=Strict`, `Secure` once TLS is on), login rate-limited.
-- **Every admin route gated**, on both listeners. The report port is for tail reports; it must not
-  answer admin calls.
+- **Operator authentication.** One password, bcrypt cost 12, session cookie (`HttpOnly`,
+  `SameSite=Lax`, `Secure` only when the listener has TLS), login serialised and rate-limited.
+- **Listener identity.** The two ports share one router, so the connection carries its role and route
+  policy is an exhaustive match. A dashboard route on the report port answers 404.
+- **Every admin route gated.** Reads too: service and machine names are what an attacker wants.
 - **Ingest keeps its own scheme.** Tails authenticate with their bearer token and cannot hold a
-  session. Two schemes coexist deliberately: token for machines, session for people.
-- **TLS import in Settings.** The operator generates a certificate and imports it; the product never
-  mints one. Path plus validation: the pair must parse, match each other, and the certificate must
-  be readable. Applies on restart, because a listener binds at boot.
+  session. Token for machines, session for people.
+- **No service data in persistent browser storage.** This reverses F11. The shell stays cached so the
+  app launches instantly; the payload does not, because it names every service and machine. The
+  dashboard is also covered on backgrounding, so the iOS app switcher never shows it.
+- **Password management as its own Settings tab**, including "log out all other devices".
+- **Reset is a CLI subcommand**, not an HTTP route: a loopback rule cannot be made honest behind a
+  reverse proxy.
+- **First run** is a 0600 token file, cleared when the password is set.
+- **TLS import in Settings.** The operator supplies the certificate; the product never mints one.
+  Validated for parse, match and expiry. Applies on restart, because a listener binds at boot.
 - **GUI first.** Anything the CLI can do with certificates must be doable from the dashboard.
 
 ### Not in scope
@@ -47,12 +54,14 @@ Per-user accounts. Roles. 2FA. Password recovery. One operator, one password.
 
 ### Done when
 
-- Every `/api/*` write returns 401 without a session.
-- A call to the admin API on the report port is refused.
+- Every operator route returns 401 without a session, reads included.
+- A dashboard route on the report port returns 404, and tail reports still work.
 - The phone loads the dashboard over HTTPS with an imported certificate.
-- The pairing tests pass: a rejected request leaves that machine unable to report, a pending request
-  survives a restart of the head, and removal deletes the machine's data from the dashboard and does
-  not re-ask. (Role switching is verified. The third- and fourth-machine test belongs to 0.7.0.)
+- Backgrounding the app and reopening the switcher shows a blank screen, not the last dashboard.
+- With the LAN unplugged, the app opens to a neutral message rather than cached service names.
+- `passwd --reset` from the console changes the password and logs out every live session.
+
+The detailed plan lives in [PLAN-0.5.0.md](PLAN-0.5.0.md).
 
 ---
 
@@ -153,5 +162,7 @@ Recorded here so a later version answers them deliberately:
 2. **Graph granularity.** Per-service first, or per-node first.
 3. **Push client.** Whether to depend on a web-push crate or implement VAPID and payload encryption
    in-tree. The encryption is nontrivial; the dependency is small.
-4. **Authentication scope.** Whether the session should also cover the PWA's own cached data, or only
-   the API.
+4. **Pairing during 0.5.0.** The operator-armed window stops anonymous writes; whether a 6-character
+   code is also needed to stop a race between a real tail and a spoofed one is left open.
+5. **Login view.** Whether it replaces the shell or overlays it. Replacing leaves nothing cached to
+   leak; overlaying keeps the app feeling instant on a slow phone.

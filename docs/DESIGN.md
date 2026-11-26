@@ -18,9 +18,15 @@ bug. Decide which, then fix it here in the same commit.
 6. **Ports are not identities.** Every `http` catalog entry carries a `verify_contains` fragment,
    and `parse()` rejects an entry without one. macOS AirPlay holds port 5000, so "something
    answered" must never be enough.
-7. **Exposure model is Uptime Kuma's.** Loopback by default, `--bind 0.0.0.0` opt-in, one bearer
-   token per node on ingest, 64 KB body cap, no wildcard CORS on writes. TLS terminates from a file
-   the operator supplies. The product issues nothing and renews nothing.
+7. **Exposure model.** Loopback by default, `--bind 0.0.0.0` opt-in, one bearer token per node on
+   ingest, 64 KB body cap, no wildcard CORS on writes. TLS terminates from a file the operator
+   supplies. The product issues nothing and renews nothing.
+7a. **Two schemes, two audiences.** A machine holds a bearer token and no session; a person holds a
+   session cookie and no token. Neither can do the other's job.
+7b. **A listener knows what it is.** Both ports run one router, but the connection carries its role
+   and the route policy is an exhaustive match, so a route cannot be added without deciding which
+   listener may serve it. A dashboard route requested on the report port answers 404 rather than 403,
+   because a 403 confirms that something is there.
 8. **SQLite:** WAL mode, `busy_timeout`, one short-lived write connection per transaction,
    `schema_version` from the first commit, 24 h raw plus hourly rollups kept for 30 days.
 9. **Poller discipline.** Fixed-rate ticks, one process snapshot per wave. A wave that overruns its
@@ -130,7 +136,18 @@ Each has a test named after it. Numbers follow the original handoff so cross-ref
 
 - **F10** Service worker: network-first shell, **network-only `/api/*`**, `caches.match()` always
   awaited. An un-awaited call resolves to a truthy Promise and paints a black screen.
-- **F11** Paint from `localStorage` before any network call, so an offline launch is instant.
+- **F11** No service data in persistent browser storage. The payload names every service and every
+  machine on the network, which is exactly what an operator password protects, so it must not survive
+  in `localStorage`, the Cache API or IndexedDB where an unauthenticated visitor can read it. What may
+  persist is preference only: the active tab, collapsed groups, the settings sub-tab. The shell stays
+  cached so the app launches instantly; the data is fetched. A cold launch shows a neutral view until
+  the LAN answers. (This replaces an earlier invariant that painted the last snapshot from
+  `localStorage` before any network call. That behaviour was correct without a password and is a leak
+  with one.)
+- **F18** Nothing is visible in the app switcher. iOS snapshots the rendered DOM when the app is
+  backgrounded and shows it again on resume, so the dashboard is covered on `visibilitychange` to
+  hidden and on `pagehide`. The cover stays up until the session is confirmed, with a timeout that
+  shows a neutral message rather than stale data.
 - **F13** No CDN fonts. The PWA has to work offline, so: system stack, or a self-hosted woff2
   committed to the repo.
 - **F14** `100dvh`, `env(safe-area-inset-*)`, tap targets of at least 44 px, no hover-only
