@@ -293,8 +293,8 @@ Session persistence needs no code: the cookie survives and the secret is on disk
 - **The login view replaces the shell, not overlays it.** An overlay leaves the dashboard in the DOM
   behind it, where devtools can read every service and machine name without ever logging in. Replacing
   means the authenticated view does not exist until the session is confirmed.
+- **One door for setup.** The token is accepted only from the 0600 file, not from loopback as well. At
+  the console the file is already readable, so a loopback path would add a second code path with the
+  same trust assumption and one more place to be wrong. One path, tested once.
 
-## Still open, and only decidable once it runs
-
-- Whether the setup token should also be accepted from loopback before it is read from the file. Same
-  trust boundary, but a second path to test.
+Nothing on this plan is waiting on a decision. It is ready to build.

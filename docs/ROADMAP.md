@@ -162,9 +162,10 @@ Recorded here so a later version answers them deliberately:
 2. **Graph granularity.** Per-service first, or per-node first.
 3. **Push client.** Whether to depend on a web-push crate or implement VAPID and payload encryption
    in-tree. The encryption is nontrivial; the dependency is small.
-4. **Setup token from loopback.** Whether the token is also accepted from loopback before it is read
-   from the file. Same trust boundary, but a second path to test.
+4. **Nothing blocking 0.5.0.** Its plan is decided and in
+   [PLAN-0.5.0.md](PLAN-0.5.0.md).
 
-Settled: no pairing verification code, because the head's approval already proves what a code would.
-The login view replaces the shell rather than covering it, so an authenticated view never exists in
-the DOM before a session does.
+Settled during review: no pairing verification code, because the head's approval already proves what
+a code would; the login view replaces the shell rather than covering it, so an authenticated view
+never exists in the DOM before a session does; and the setup token is accepted only from its 0600
+file, not from loopback as a second path with the same trust assumption.
