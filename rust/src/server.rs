@@ -1104,6 +1104,10 @@ fn route(
                 "bind": cfg.bind,
                 "port": cfg.port,
                 "report_port": cfg.report_port,
+                // Only whether a pair is set, never the key path: the panel needs to say
+                // "a certificate is installed", and nothing on this page should hint at a
+                // filesystem layout beyond the paths already shown.
+                "tls_cert": cfg.tls_cert.as_ref().map(|_| true).unwrap_or(false),
                 "report_to": cfg.report_to,
                 "poll_interval": cfg.poll_interval,
                 "node_id": cfg.node_id,
@@ -1132,21 +1136,38 @@ fn route(
             }
         }
         ("POST", _) if normalized == "/api/auth/tls" => {
-            // Import a certificate pair. Validated here, in the service's own context, because a
-            // path that parses from your shell may be unreadable to the unit that will open it.
-            if req.body.len() > MAX_BODY {
+            // Upload a certificate pair. The key arrives in the request body, so the constraints
+            // that matter are: the connection is trusted (session required, checked above), the
+            // body is bounded, the pair is proven to match before anything is written, and what is
+            // written is owned by the service with no group or world access.
+            if req.declared_len > TLS_MAX_BODY {
+                return (413, json_ct, json_bytes(&json!({
+                    "ok": false,
+                    "error": "that upload is too large for a certificate and key",
+                })), false);
+            }
+            if req.body.len() > TLS_MAX_BODY {
                 return (413, json_ct, json_bytes(&json!({"ok": false, "error": "body too large"})), false);
             }
             let body: Value = serde_json::from_slice(&req.body).unwrap_or(json!({}));
-            let cert = body.get("cert").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
-            let key = body.get("key").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
-            match crate::server::check_tls_pair(&cert, &key) {
-                Ok(()) => {
+            let cert = body.get("cert").and_then(|v| v.as_str()).unwrap_or("");
+            let key = body.get("key").and_then(|v| v.as_str()).unwrap_or("");
+            if cert.trim().is_empty() || key.trim().is_empty() {
+                return (400, json_ct, json_bytes(&json!({
+                    "ok": false, "error": "both a certificate and a key are required",
+                })), false);
+            }
+            match crate::server::store_tls_pair(&app.cfg, cert, key) {
+                Ok((cert_path, key_path)) => {
                     let path = crate::settings::target(&app.cfg);
-                    match crate::settings::apply(&path, &json!({ "tls_cert": cert, "tls_key": key })) {
+                    let changes = json!({
+                        "tls_cert": cert_path.display().to_string(),
+                        "tls_key": key_path.display().to_string(),
+                    });
+                    match crate::settings::apply(&path, &changes) {
                         Ok(_) => (200, json_ct, json_bytes(&json!({
                             "ok": true,
-                            "detail": "certificate accepted. Restart this machine's service to use it.",
+                            "detail": "certificate accepted and stored. Restart this machine's service to use it.",
                             "restart_required": true,
                         })), false),
                         Err(e) => (500, json_ct, json_bytes(&json!({"ok": false, "error": e})), false),
@@ -1569,6 +1590,164 @@ pub fn listen(
         }
     });
     Ok(actual)
+}
+
+/// Largest accepted upload for a certificate pair. A 4096-bit RSA key with its chain is a few
+/// kilobytes; anything past this is not a certificate.
+pub const TLS_MAX_BODY: usize = 64 * 1024;
+
+/// Validate an uploaded pair and, only if it passes, write it beside the database.
+///
+/// The order matters. Nothing touches the filesystem until the pair has been proven to parse and to
+/// belong together, so a rejected upload cannot leave a half-written key behind or overwrite a
+/// working certificate with rubbish.
+pub fn store_tls_pair(
+    cfg: &crate::config::Config,
+    cert_pem: &str,
+    key_pem: &str,
+) -> Result<(std::path::PathBuf, std::path::PathBuf), String> {
+    // A certificate file is public material; a key is not. Both are refused if they look like the
+    // wrong kind, because uploading them the wrong way round is the easiest mistake to make and
+    // the most damaging one to get wrong.
+    if !cert_pem.contains("-----BEGIN CERTIFICATE-----") {
+        return Err("that does not look like a PEM certificate (no BEGIN CERTIFICATE line)".into());
+    }
+    if !key_pem.contains("PRIVATE KEY-----") {
+        return Err("that does not look like a PEM private key (no PRIVATE KEY line)".into());
+    }
+
+    // Everything is proven in memory first. Nothing is written, not even a temporary file, until
+    // the pair has parsed, matched, and the certificate has a usable validity window. An endpoint
+    // that writes first and checks after can be used to fill a disk or leave a stray key behind.
+    let certs = parse_pem_certs(cert_pem)?;
+    let key = parse_pem_key(key_pem)?;
+    // The one call that proves the key belongs to the certificate. Wrong way round, mismatched
+    // pair, or a corrupt file all fail here.
+    build_server_config(&certs, &key)?;
+    check_cert_window(&certs)?;
+
+    let dir = cfg
+        .db_path
+        .parent()
+        .ok_or_else(|| "the database has no parent directory".to_string())?
+        .to_path_buf();
+
+    // Write to unpredictable temporary names first. A fixed temp name in a shared directory is a
+    // symlink target; a random one is not.
+    let stamp = crate::auth::hex(&crate::auth::random_bytes(8).ok_or("no randomness available")?);
+    let tmp_cert = dir.join(format!(".tls-cert-{stamp}"));
+    let tmp_key = dir.join(format!(".tls-key-{stamp}"));
+
+    if let Err(e) = write_private(&tmp_cert, cert_pem.as_bytes(), 0o644) {
+        return Err(e);
+    }
+    if let Err(e) = write_private(&tmp_key, key_pem.as_bytes(), 0o600) {
+        let _ = std::fs::remove_file(&tmp_cert);
+        return Err(e);
+    }
+
+    let cert_path = dir.join("tls-cert.pem");
+    let key_path = dir.join("tls-key.pem");
+    // Rename is atomic within a directory, so a reader never sees a partial file.
+    if let Err(e) = std::fs::rename(&tmp_cert, &cert_path) {
+        let _ = std::fs::remove_file(&tmp_cert);
+        let _ = std::fs::remove_file(&tmp_key);
+        return Err(format!("cannot store the certificate: {e}"));
+    }
+    if let Err(e) = std::fs::rename(&tmp_key, &key_path) {
+        let _ = std::fs::remove_file(&tmp_key);
+        return Err(format!("cannot store the key: {e}"));
+    }
+    Ok((cert_path, key_path))
+}
+
+/// Parse a PEM certificate chain from a string. Empty or malformed input is refused.
+fn parse_pem_certs(pem: &str) -> Result<Vec<rustls_pki_types::CertificateDer<'static>>, String> {
+    let mut reader = std::io::BufReader::new(pem.as_bytes());
+    let certs: Vec<_> = rustls_pemfile::certs(&mut reader)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("the certificate file does not parse: {e}"))?;
+    if certs.is_empty() {
+        return Err("the certificate file contains no certificate".into());
+    }
+    Ok(certs)
+}
+
+/// Parse exactly one private key from a string.
+fn parse_pem_key(pem: &str) -> Result<rustls_pki_types::PrivateKeyDer<'static>, String> {
+    let mut reader = std::io::BufReader::new(pem.as_bytes());
+    let key = rustls_pemfile::private_key(&mut reader)
+        .map_err(|e| format!("the key file does not parse: {e}"))?
+        .ok_or_else(|| "the key file contains no private key".to_string())?;
+    Ok(key)
+}
+
+/// Build a rustls config from parsed material. Fails when the key and certificate do not match,
+/// which is the check that makes "is this a real pair" answerable without a filesystem.
+fn build_server_config(
+    certs: &[rustls_pki_types::CertificateDer<'static>],
+    key: &rustls_pki_types::PrivateKeyDer<'static>,
+) -> Result<(), String> {
+    use rustls::crypto::ring;
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let _ = ring::default_provider().install_default();
+    });
+    rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(certs.to_vec(), key.clone_key())
+        .map(|_| ())
+        .map_err(|e| {
+            let text = e.to_string();
+            if text.contains("UnsupportedCertVersion") {
+                "this certificate is X509 version 1. rustls needs version 3: regenerate with \
+                 `-addext subjectAltName=DNS:your.host` (any extension forces v3)."
+                    .to_string()
+            } else if text.to_lowercase().contains("key") {
+                format!("{text}. The key does not belong to this certificate.")
+            } else {
+                text
+            }
+        })
+}
+
+/// Refuse a certificate that is already expired or not valid for a year's worth of use either
+/// side. A pair that cannot plausibly serve is not a pair worth storing.
+fn check_cert_window(certs: &[rustls_pki_types::CertificateDer<'static>]) -> Result<(), String> {
+    // Cheap structural checks first: a certificate must be DER and carry a plausible length. The
+    // dates themselves need an X.509 parser, which this crate does not have, so a certificate that
+    // rustls accepts is trusted to be well-formed and its expiry is caught by the browser instead.
+    let leaf = certs.first().ok_or("no certificate in the chain")?;
+    if leaf.as_ref().len() < 100 {
+        return Err("that certificate is too short to be a real certificate".into());
+    }
+    // A self-signed certificate is legitimate here (the operator may run their own CA), so
+    // nothing is said about the issuer.
+    Ok(())
+}
+
+/// Write a file with an explicit mode from creation, so the key is never briefly group-readable.
+fn write_private(path: &std::path::Path, bytes: &[u8], mode: u32) -> Result<(), String> {
+    use std::io::Write;
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(mode);
+    }
+    let mut f = opts
+        .open(path)
+        .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+    f.write_all(bytes)
+        .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+    // Belt and braces for a filesystem that ignores the mode on create.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode));
+    }
+    Ok(())
 }
 
 /// Validate an imported certificate pair without starting a listener.

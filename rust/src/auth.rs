@@ -191,7 +191,7 @@ pub fn rotate_secret(db_path: &Path) -> Result<(), String> {
     put(db_path, KEY_SECRET, &hex(&bytes))
 }
 
-fn random_bytes(n: usize) -> Option<Vec<u8>> {
+pub fn random_bytes(n: usize) -> Option<Vec<u8>> {
     use std::io::Read;
     let mut buf = vec![0u8; n];
     let mut f = std::fs::File::open("/dev/urandom").ok()?;
