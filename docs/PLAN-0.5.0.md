@@ -181,8 +181,11 @@ The largest frontend package, because it removes something.
   `localStorage`. The per-node snapshot and the cached history go the same way. What may persist is
   preference (active tab, collapsed groups, settings sub-tab) and nothing that names a service or a
   machine.
-- **Initial HTML renders a neutral view.** No hostnames, no counts. The shell stays cached so the app
-  launches instantly; the data is fetched.
+- **Initial HTML renders a neutral view, and it is the only view until the session is confirmed.**
+  The login screen **replaces** the dashboard in the DOM rather than covering it. An overlay leaves the
+  real dashboard in the document behind the curtain, where the inspect console reads every service and
+  machine name without logging in, which would defeat the password entirely. Replacing means the
+  authenticated markup does not exist until a session exists. No hostnames, no counts in the shell.
 - **Blank on hide.** On `visibilitychange` to hidden, and on `pagehide`, cover the dashboard at once.
   iOS snapshots the rendered DOM for the app switcher and flashes it on resume, so without this a
   phone locked for a day shows yesterday's dashboard to whoever opens it. That leak exists today,
@@ -282,12 +285,16 @@ something real to talk to.
 Multi-user. Roles. 2FA. Password recovery by email. OIDC or SAML. Per-session revocation lists.
 Session persistence needs no code: the cookie survives and the secret is on disk.
 
+## Settled after review
+
+- **No pairing verification code.** The head shows the request and a human presses the tick, so a
+  second shared secret proves nothing the approval does not already prove. What remains is the
+  operator-armed window plus a cap and a TTL, which is enough to stop anonymous writes and flooding.
+- **The login view replaces the shell, not overlays it.** An overlay leaves the dashboard in the DOM
+  behind it, where devtools can read every service and machine name without ever logging in. Replacing
+  means the authenticated view does not exist until the session is confirmed.
+
 ## Still open, and only decidable once it runs
 
 - Whether the setup token should also be accepted from loopback before it is read from the file. Same
   trust boundary, but a second path to test.
-- Whether the login view replaces the shell or overlays it. Replacing leaves nothing cached to leak;
-  overlaying keeps the app feeling instant. WP6 as written assumes replace.
-- Whether pairing needs the 6-character verification code in addition to the operator-armed window.
-  The window alone stops anonymous writes; the code stops a race between a real tail and a spoofed
-  one during the window.

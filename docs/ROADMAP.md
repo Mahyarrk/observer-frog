@@ -162,7 +162,9 @@ Recorded here so a later version answers them deliberately:
 2. **Graph granularity.** Per-service first, or per-node first.
 3. **Push client.** Whether to depend on a web-push crate or implement VAPID and payload encryption
    in-tree. The encryption is nontrivial; the dependency is small.
-4. **Pairing during 0.5.0.** The operator-armed window stops anonymous writes; whether a 6-character
-   code is also needed to stop a race between a real tail and a spoofed one is left open.
-5. **Login view.** Whether it replaces the shell or overlays it. Replacing leaves nothing cached to
-   leak; overlaying keeps the app feeling instant on a slow phone.
+4. **Setup token from loopback.** Whether the token is also accepted from loopback before it is read
+   from the file. Same trust boundary, but a second path to test.
+
+Settled: no pairing verification code, because the head's approval already proves what a code would.
+The login view replaces the shell rather than covering it, so an authenticated view never exists in
+the DOM before a session does.
