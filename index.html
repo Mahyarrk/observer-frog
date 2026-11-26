@@ -479,6 +479,11 @@
     /* Pairing: a request is a decision, so the two actions read as yes and no, not as buttons. */
     .pair-list { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
     .pair-empty { margin: 0; font-size: 12px; opacity: .7; }
+    /* Empty states use the same type as .pair-empty, and red when the emptiness is a problem
+       rather than a state. A bare text node inherited whatever the container had, which is why
+       this one looked unlike the rest of the panel. */
+    .settings-empty { margin: 0; font-size: 12px; line-height: 1.5; opacity: .7; }
+    .settings-empty.bad { color: var(--down-color); opacity: 1; }
     .pair-subtitle {
       font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
       opacity: .7; margin: 18px 0 0;
@@ -2168,7 +2173,7 @@
       const API_BASE = (window.location.pathname.replace(/\/$/, '') || '');
       // Bump on every shell change. Declared before first use: a `const` referenced above its
       // declaration throws a TDZ error and takes the whole script down (it did).
-      const BUILD = 'of-24';
+      const BUILD = 'of-25';
       // Show the address actually in use, not a baked-in host.
       (function () {
         const el = document.getElementById('brand-url');
@@ -3051,9 +3056,9 @@
         servicesStamp = stamp;
         box.textContent = '';
         if (!d.count) {
-          const empty = document.createElement('span');
-          empty.className = 'settings-hint';
-          empty.textContent = 'No services yet — this node reports vitals only.';
+          const empty = document.createElement('p');
+          empty.className = 'settings-empty';
+          empty.textContent = 'No services yet: this node reports vitals only.';
           box.appendChild(empty);
           return;
         }
@@ -3125,8 +3130,8 @@
           if (!box) return;
           box.textContent = '';
           if (!items.length) {
-            const e = document.createElement('span');
-            e.className = 'settings-hint';
+            const e = document.createElement('p');
+            e.className = 'settings-empty';
             e.textContent = boxId === 'set-cand-available' ? 'Nothing new is running.' : 'Nothing here.';
             box.appendChild(e);
             return;
@@ -3499,11 +3504,22 @@
         });
         on('set-scan', async () => {
           const box = document.getElementById('set-heads');
-          if (box) box.textContent = 'scanning…';
+          const say = (msg, bad) => {
+            if (!box) return;
+            box.textContent = '';
+            if (!msg) return;
+            const p = document.createElement('p');
+            p.className = 'settings-empty' + (bad ? ' bad' : '');
+            p.textContent = msg;
+            box.appendChild(p);
+          };
+          say('scanning…', false);
           try {
             const d = await (await fetch('api/heads', { cache: 'no-store' })).json();
             if (!box) return;
-            if (!d.found) { box.textContent = 'No heads answered on this network.'; return; }
+            // No head found is the normal state on a one-machine network, but on a machine that
+            // is looking for one it means nothing answered, so it reads as a problem.
+            if (!d.found) { say('No heads answered on this network.', true); return; }
             box.textContent = '';
             for (const h of d.heads) {
               const card = document.createElement('div');
@@ -3556,7 +3572,7 @@
               box.appendChild(card);
             }
           } catch (e) {
-            if (box) box.textContent = 'scan failed: ' + e;
+            say('scan failed: ' + e, true);
           }
         });
       }
