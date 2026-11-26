@@ -169,8 +169,40 @@
     .header-top-row {
       display: flex;
       align-items: center;
-      justify-content: flex-start;
+      justify-content: space-between;
       gap: 0.75rem;
+    }
+
+    /* Two matching squares on the right of the brand row. Same size, same radius, same stroke,
+       because a settings button that looks unlike the refresh beside it reads as a different
+       kind of control. */
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      flex: 0 0 auto;
+    }
+
+    .header-actions .header-refresh-btn {
+      width: 2.5rem;
+      height: 2.5rem;
+      min-width: 44px;
+      min-height: 44px;
+      border-radius: var(--r-sm);
+      background: rgba(30, 41, 59, 0.9);
+      border: 1px solid rgba(148, 163, 184, 0.2);
+      color: var(--text-secondary);
+    }
+
+    .header-actions .header-refresh-btn:hover {
+      color: var(--text-primary);
+      border-color: rgba(148, 163, 184, 0.4);
+    }
+
+    .header-actions .gear-btn.is-open {
+      color: var(--accent-blue);
+      border-color: rgba(59, 130, 246, 0.5);
+      background: rgba(59, 130, 246, 0.14);
     }
 
     .header-brand {
@@ -252,16 +284,20 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 0.75rem;
+      gap: 0.5rem;
+      flex-wrap: nowrap;
+      min-width: 0;
     }
 
     .telemetry-pill {
       display: inline-flex;
       align-items: center;
       gap: 0.5rem;
+      box-sizing: border-box;
+      min-height: 38px;
       background: rgba(15, 23, 42, 0.95);
       border: 1px solid rgba(148, 163, 184, 0.18);
-      border-radius: var(--r-md);
+      border-radius: var(--r-sm);
       padding: 0.35rem 0.75rem;
       font-size: var(--t-meta);
       color: var(--text-secondary);
@@ -309,24 +345,7 @@
       animation: rotate360 0.65s cubic-bezier(0.4, 0, 0.2, 1) infinite;
     }
 
-    /* Gear above refresh: two square buttons in the space one row used to take. */
-    .header-btn-stack {
-      display: flex;
-      flex-direction: column;
-      gap: 0.375rem;
-      flex-shrink: 0;
-    }
 
-    .header-btn-stack .header-refresh-btn {
-      width: 2.75rem;
-      height: 2.75rem;
-    }
-
-    .gear-btn.is-open {
-      background: rgba(59, 130, 246, 0.18);
-      border-color: rgba(59, 130, 246, 0.45);
-      color: var(--accent-blue);
-    }
 
     /* Sub-bar: Navigation / Tab / Scope Info */
     .header-sub-row {
@@ -334,20 +353,26 @@
       align-items: center;
       justify-content: space-between;
       gap: 0.5rem;
-      row-gap: 0.45rem;
-      flex-wrap: wrap;
+      flex-wrap: nowrap;
       min-width: 0;
-      padding-top: 0.5rem;
+      padding-top: 0.4rem;
       border-top: 1px solid rgba(148, 163, 184, 0.1);
       font-size: var(--t-meta);
     }
+
+    /* A tail has no roster, so the row would be a lone empty strip. Hide it rather than leave a
+       rule with nothing under it. */
+    .header-sub-row:has(.node-bar[hidden]) .header-sub-meta { margin-left: auto; }
 
     .node-bar {
       display: flex;
       align-items: center;
       gap: 10px;
-      margin: 10px 0 0;
-      padding: 8px 12px;
+      margin: 0;
+      padding: 6px 10px;
+      min-width: 0;
+      flex: 0 1 auto;
+      overflow: hidden;
       border: 1px solid var(--border, #1e293b);
       border-radius: 12px;
       background: var(--card, rgba(15, 23, 42, 0.6));
@@ -390,25 +415,29 @@
 
     .nav-tabs {
       display: inline-flex;
-      flex-wrap: wrap;
-      max-width: 100%;
-      padding: 0.2rem;
-      border-radius: var(--r-md);
+      align-items: center;
+      box-sizing: border-box;
+      min-height: 38px;
+      flex-wrap: nowrap;
+      padding: 0 0.15rem;
+      border-radius: var(--r-sm);
       background: rgba(15, 23, 42, 0.9);
       border: 1px solid rgba(148, 163, 184, 0.15);
-      gap: 0.25rem;
+      gap: 0.15rem;
+      flex: 0 0 auto;
     }
 
     .nav-tab-btn {
-      padding: 0.45rem 0.7rem;
-      min-height: 44px;
+      padding: 0.3rem 0.6rem;
+      min-height: 32px;
       min-width: 0;
-      border-radius: var(--r-sm);
+      border-radius: calc(var(--r-sm) - 3px);
       font-size: var(--t-meta);
       font-weight: 600;
-      color: var(--text-primary);
-      background: rgba(30, 41, 59, 0.9);
-      border: 1px solid rgba(148, 163, 184, 0.2);
+      color: var(--text-secondary);
+      background: transparent;
+      border: 1px solid transparent;
+      white-space: nowrap;
       display: inline-flex;
       align-items: center;
       gap: 0.4rem;
@@ -1033,24 +1062,37 @@
 
     /* Phones: stack banner vertically so count chips never sit on the timestamp */
     @media (max-width: 640px) {
-      /* Tabs take the full row; PORT 443 / PWA READY drop to their own line below
-         them instead of forcing a horizontal scroll on a 390 pt viewport. */
+      /* Tabs share the row with the timer pill: the two together fit a 390 pt viewport, and
+         forcing them full width pushed them onto a second line and doubled the header height. */
       .nav-tabs {
-        width: 100%;
+        flex: 0 1 auto;
+        min-width: 0;
+        justify-content: flex-end;
       }
       .nav-tab-btn {
-        flex: 1 1 auto;
+        flex: 0 1 auto;
         justify-content: center;
         min-width: 0;
+        white-space: nowrap;
       }
-      .tab-badge {
+      .nav-tab-btn .tab-emoji {
+        display: none;
+      }
+      /* The counters already live in the banner a few pixels below, so on a phone the badge
+         costs 68px of a 361px row to repeat them. */
+      .nav-tab-btn .tab-badge {
+        display: none;
+      }
+      /* Node select and the PORT/PWA meta share one line. The select shrinks; the meta does not,
+         because truncating "PWA READY" mid-word reads as broken. */
+      .node-bar {
+        flex: 1 1 auto;
         min-width: 0;
-        overflow: hidden;
-        text-overflow: ellipsis;
       }
       .header-sub-meta {
-        width: 100%;
-        justify-content: flex-start;
+        flex: 0 0 auto;
+        justify-content: flex-end;
+        font-size: 10px;
       }
       .overview-banner {
         flex-direction: column;
@@ -1853,6 +1895,22 @@
             <div class="brand-url" id="brand-url">connecting…</div>
           </div>
         </div>
+        <div class="header-actions">
+          <button id="gear-btn" class="header-refresh-btn gear-btn" type="button" title="Settings" aria-label="Open settings">
+            <svg id="gear-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="3.1"></circle>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+            </svg>
+          </button>
+          <button id="refresh-btn" class="header-refresh-btn" type="button" title="Refresh status now" aria-label="Refresh status now">
+            <svg id="refresh-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path>
+              <path d="M3 3v5h5"></path>
+              <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"></path>
+              <path d="M16 16h5v5"></path>
+            </svg>
+          </button>
+        </div>
       </div>
 
       <!-- Row 2: Timer Capsule & Refresh Button (Underneath Brand & Address) -->
@@ -1862,39 +1920,23 @@
           <span class="divider">|</span>
           <span>Next: <strong id="countdown-text" class="poll-count">60s</strong></span>
         </div>
-        <div class="header-btn-stack">
-        <button id="gear-btn" class="header-refresh-btn gear-btn" type="button" title="Settings" aria-label="Open settings">
-          <svg id="gear-icon" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="12" cy="12" r="3"></circle>
-            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
-          </svg>
-        </button>
-        <button id="refresh-btn" class="header-refresh-btn" type="button" title="Refresh status now" aria-label="Refresh status now">
-          <svg id="refresh-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path>
-            <path d="M3 3v5h5"></path>
-            <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"></path>
-            <path d="M16 16h5v5"></path>
-          </svg>
-        </button>
-        </div>
-      </div>
-
-      <!-- Row 3: Navigation and Scope -->
-      <div class="header-sub-row">
         <div class="nav-tabs">
           <button class="nav-tab-btn active" id="tab-btn-live" type="button">
-            <span>📡</span>
-            <span>Telemetry</span>
+            <span class="tab-emoji" aria-hidden="true">📡</span>
+            <span class="tab-label">Telemetry</span>
             <span class="tab-badge" id="tab-badge-count">-- UP</span>
           </button>
           <button class="nav-tab-btn" id="tab-btn-history" type="button">
-            <span>🗂</span>
-            <span>History</span>
+            <span class="tab-emoji" aria-hidden="true">🗂</span>
+            <span class="tab-label">History</span>
             <span class="tab-badge" id="tab-badge-history">--</span>
           </button>
 
         </div>
+      </div>
+
+      <!-- Row 3: Node and scope -->
+      <div class="header-sub-row">
         <div class="node-bar" id="node-bar" hidden>
           <label class="node-bar-label" for="node-select">NODE</label>
           <select id="node-select" class="node-select"></select>
@@ -2173,7 +2215,7 @@
       const API_BASE = (window.location.pathname.replace(/\/$/, '') || '');
       // Bump on every shell change. Declared before first use: a `const` referenced above its
       // declaration throws a TDZ error and takes the whole script down (it did).
-      const BUILD = 'of-25';
+      const BUILD = 'of-31';
       // Show the address actually in use, not a baked-in host.
       (function () {
         const el = document.getElementById('brand-url');
