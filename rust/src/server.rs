@@ -508,6 +508,79 @@ fn json_bytes(v: &Value) -> Vec<u8> {
     serde_json::to_vec(v).unwrap_or_else(|_| b"{}".to_vec())
 }
 
+/// Which listener accepted this connection.
+///
+/// Both ports run one router over one `App`. Without this the plain-HTTP report port answers
+/// admin routes, because nothing in the request says which port it arrived on.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ListenerRole {
+    /// The dashboard: browsers, the phone, the operator.
+    Dashboard,
+    /// Plain HTTP for tail reports. Deliberately certificate-free, therefore deliberately narrow.
+    Reports,
+}
+
+/// Everything about the connection that is not in the request line.
+#[derive(Clone, Copy, Debug)]
+pub struct ConnMeta {
+    pub role: ListenerRole,
+    pub peer: Option<std::net::SocketAddr>,
+}
+
+impl ConnMeta {
+    pub fn new(role: ListenerRole, peer: Option<std::net::SocketAddr>) -> Self {
+        Self { role, peer }
+    }
+
+    /// Local means a request that demonstrably came from this machine's own loopback.
+    ///
+    /// Read from the socket, never from a header: `X-Forwarded-For` is a value the client writes.
+    pub fn is_loopback(&self) -> bool {
+        self.peer.map(|p| p.ip().is_loopback()).unwrap_or(false)
+    }
+}
+
+/// The only routes a report-port connection may reach.
+///
+/// Everything else answers 404 rather than 403: a 403 confirms that a route exists on this machine,
+/// which is information a LAN scanner should not get for free.
+///
+/// This list is the whole policy for that listener. It is short on purpose: a tail speaks to one
+/// endpoint, and health exists so a monitor can see the port is alive.
+pub const REPORTS_PORT_ROUTES: &[&str] = &["/api/report", "/api/health"];
+
+pub fn reports_port_allows(path: &str) -> bool {
+    REPORTS_PORT_ROUTES.contains(&path)
+}
+
+/// Every route the dashboard serves. Kept here so the admin surface is a list a reader can see,
+/// rather than something discovered by scrolling a thousand-line match.
+///
+/// A route missing from this list is not a security hole on its own, but it is a route nobody
+/// classified, so the test below fails when the two drift apart.
+pub const DASHBOARD_ROUTES: &[&str] = &[
+    "/api/status",
+    "/api/nodes",
+    "/api/poll",
+    "/api/history",
+    "/api/health",
+    "/api/node/name",
+    "/api/report",
+    "/api/settings",
+    "/api/autostart",
+    "/api/discover/services",
+    "/api/catalog",
+    "/api/services",
+    "/api/services/add",
+    "/api/services/remove",
+    "/api/heads",
+    "/api/pair",
+    "/api/pair/ask",
+    "/api/pair/decide",
+    "/api/pair/remove",
+    "/api/ignore",
+];
+
 struct Request {
     method: String,
     path: String,
@@ -519,7 +592,7 @@ struct Request {
     declared_len: usize,
 }
 
-fn handle<S: Read + Write>(mut stream: S, app: Arc<App>) {
+fn handle<S: Read + Write>(mut stream: S, app: Arc<App>, conn: ConnMeta) {
     // Parse the request inside one borrow of the stream, then write the response after it drops.
     let req = {
         let mut reader = BufReader::new(&mut stream);
@@ -577,7 +650,7 @@ fn handle<S: Read + Write>(mut stream: S, app: Arc<App>) {
         Request { method, path, query, headers, body, declared_len: length }
     };
 
-    let (code, ctype, payload, cors) = route(&req, &app);
+    let (code, ctype, payload, cors) = route(&req, &app, conn);
     let head_only = req.method == "HEAD";
     let mut out = Vec::new();
     out.extend_from_slice(format!("HTTP/1.1 {code} {}\r\n", reason(code)).as_bytes());
@@ -635,9 +708,19 @@ fn reason(code: u16) -> &'static str {
     }
 }
 
-fn route(req: &Request, app: &Arc<App>) -> (u16, String, Vec<u8>, bool) {
+fn route(req: &Request, app: &Arc<App>, conn: ConnMeta) -> (u16, String, Vec<u8>, bool) {
     let json_ct = "application/json; charset=utf-8".to_string();
     let normalized = req.path.replace("/status", "");
+
+    // A report-port connection may not reach the admin surface. Checked on both spellings of the
+    // path, because every route also answers under `/status/...` for the reverse-proxy layout, and
+    // a check on one spelling would be a way around the other.
+    if conn.role == ListenerRole::Reports
+        && !(reports_port_allows(&req.path) || reports_port_allows(&normalized))
+    {
+        // 404, not 403: this listener should not confirm which routes exist.
+        return (404, json_ct, json_bytes(&json!({"error": "not found"})), false);
+    }
 
     match (req.method.as_str(), req.path.as_str()) {
         ("GET" | "HEAD", p) if p == "/api/status" || p == "/status/api/status" => {
@@ -1114,7 +1197,7 @@ fn route(req: &Request, app: &Arc<App>) -> (u16, String, Vec<u8>, bool) {
 /// With a cert and key every accepted connection is wrapped in TLS before the HTTP parser sees
 /// it, so the request handler stays unaware of the transport.
 pub fn serve(app: Arc<App>, bind: &str, port: u16, tls: Option<(PathBuf, PathBuf)>) -> std::io::Result<u16> {
-    listen(app, bind, port, tls)
+    listen(app, bind, port, tls, ListenerRole::Dashboard)
 }
 
 /// Bind one listener and serve it. Call it twice to have TLS and plain HTTP at the same time.
@@ -1123,7 +1206,13 @@ pub fn serve(app: Arc<App>, bind: &str, port: u16, tls: Option<(PathBuf, PathBuf
 /// report that arrives over plain HTTP is immediately visible to a browser reading over TLS.
 /// This is deliberate because a tail on a LAN cannot reasonably be asked to manage certificates,
 /// while a phone installing a PWA cannot reasonably be asked to trust a plain-HTTP origin.
-pub fn listen(app: Arc<App>, bind: &str, port: u16, tls: Option<(PathBuf, PathBuf)>) -> std::io::Result<u16> {
+pub fn listen(
+    app: Arc<App>,
+    bind: &str,
+    port: u16,
+    tls: Option<(PathBuf, PathBuf)>,
+    role: ListenerRole,
+) -> std::io::Result<u16> {
     let listener = TcpListener::bind((bind, port))?;
     let actual = listener.local_addr()?.port();
 
@@ -1135,16 +1224,20 @@ pub fn listen(app: Arc<App>, bind: &str, port: u16, tls: Option<(PathBuf, PathBu
     std::thread::spawn(move || {
         for stream in listener.incoming() {
             let Ok(stream) = stream else { break };
+            // The peer address comes from the socket, captured before TLS wraps it and the HTTP
+            // parser takes the stream. Anything read from a header later is client-supplied.
+            let peer = stream.peer_addr().ok();
+            let meta = ConnMeta::new(role, peer);
             let app = Arc::clone(&app);
             match config.clone() {
                 None => {
-                    std::thread::spawn(move || handle(stream, app));
+                    std::thread::spawn(move || handle(stream, app, meta));
                 }
                 Some(cfg) => {
                     std::thread::spawn(move || {
                         let Ok(conn) = rustls::ServerConnection::new(cfg) else { return };
                         let mut tls = rustls::StreamOwned::new(conn, stream);
-                        handle(&mut tls, app);
+                        handle(&mut tls, app, meta);
                     });
                 }
             }
@@ -1176,4 +1269,48 @@ fn tls_config(cert_path: &PathBuf, key_path: &PathBuf) -> std::io::Result<rustls
         .with_no_client_auth()
         .with_single_cert(certs, key)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn loopback() -> ConnMeta {
+        ConnMeta::new(ListenerRole::Dashboard, Some("127.0.0.1:50000".parse().unwrap()))
+    }
+
+    #[test]
+    fn the_reports_port_admits_only_its_own_routes() {
+        // A tail speaks to exactly one endpoint, so anything else on that port is a mistake or a
+        // probe. Both spellings are checked because every route also answers under /status/...
+        for route in REPORTS_PORT_ROUTES {
+            assert!(reports_port_allows(route), "{route} must be reachable from the reports port");
+        }
+        for route in ["/api/settings", "/api/services/add", "/api/pair/decide", "/api/status"] {
+            assert!(!reports_port_allows(route), "{route} must not be reachable from the reports port");
+        }
+    }
+
+    #[test]
+    fn the_admin_surface_is_enumerated_not_discovered() {
+        // Every dashboard route is listed, and the two lists do not overlap by accident: /api/report
+        // and /api/health are the only routes both listeners answer, because a tail reports and a
+        // monitor checks.
+        let shared: Vec<&str> = REPORTS_PORT_ROUTES
+            .iter()
+            .copied()
+            .filter(|r| DASHBOARD_ROUTES.contains(r))
+            .collect();
+        assert_eq!(shared, vec!["/api/report", "/api/health"]);
+        assert_eq!(DASHBOARD_ROUTES.len(), 20, "a route was added; classify it deliberately");
+    }
+
+    #[test]
+    fn loopback_is_read_from_the_socket() {
+        assert!(loopback().is_loopback());
+        let remote = ConnMeta::new(ListenerRole::Dashboard, Some("192.0.2.10:5000".parse().unwrap()));
+        assert!(!remote.is_loopback());
+        // No peer at all is not loopback. An unknown address must never be treated as local.
+        assert!(!ConnMeta::new(ListenerRole::Dashboard, None).is_loopback());
+    }
 }

@@ -59,7 +59,7 @@ pub fn run(cfg: Config, config_path: Option<PathBuf>, tls: Option<(PathBuf, Path
     let poller_holder: Arc<Mutex<Option<Arc<poller::Poller>>>> = Arc::new(Mutex::new(None));
     let app = build(&cfg, Arc::clone(&poller_holder));
 
-    let port = match server::listen(Arc::clone(&app), &cfg.bind, cfg.port, tls.clone()) {
+    let port = match server::listen(Arc::clone(&app), &cfg.bind, cfg.port, tls.clone(), server::ListenerRole::Dashboard) {
         Ok(p) => p,
         Err(e) => {
             eprintln!("cannot bind {}:{}: {e}", cfg.bind, cfg.port);
@@ -75,7 +75,7 @@ pub fn run(cfg: Config, config_path: Option<PathBuf>, tls: Option<(PathBuf, Path
         if rp == cfg.port {
             eprintln!("report_port {} is the same as port; the report listener is disabled", rp);
         } else {
-            match server::listen(Arc::clone(&app), &cfg.bind, rp, None) {
+            match server::listen(Arc::clone(&app), &cfg.bind, rp, None, server::ListenerRole::Reports) {
                 Ok(p) => report_bound = Some(p),
                 Err(e) => eprintln!("cannot bind report port {}:{}: {e} (continuing without it)", cfg.bind, rp),
             }

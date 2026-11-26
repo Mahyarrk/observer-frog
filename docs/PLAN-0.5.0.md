@@ -298,3 +298,17 @@ Session persistence needs no code: the cookie survives and the secret is on disk
   same trust assumption and one more place to be wrong. One path, tested once.
 
 Nothing on this plan is waiting on a decision. It is ready to build.
+
+## Sequencing
+
+**Deploy once, at the end.** All nine packages land before anything is installed. WP4 is the point
+where the dashboard needs a password to show anything, so a mid-work deploy would lock the phone out
+of a half-finished build and leave the operator running setup against code that is still moving.
+
+Development therefore happens against a scratch instance on a spare port, and the laptop and Mac are
+touched once when the whole thing is coherent.
+
+**Roles flip first, before any code.** The plan's acceptance criteria are written for the laptop as
+head, and the Mac is head today. Flipping is a prerequisite rather than part of the work, and it is
+confirmed working before the first line of auth code exists, so a later failure is not ambiguous
+between the flip and the feature.
