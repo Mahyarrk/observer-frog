@@ -214,7 +214,8 @@ pub const CAND_ALREADY: &str = "already-monitored";
 
 /// Classify every catalog entry against what this machine is actually running.
 pub fn candidates(entries: &[Entry], host: &str, monitored: &[String]) -> Vec<Candidate> {
-    let listeners = listening();
+    // No socket table here: every decision below is made by connecting to the port, because an
+    // unprivileged process cannot see sockets held by another user.
     let mut out = Vec::new();
     for entry in entries {
         let mut state = CAND_NOT_RUNNING;
@@ -227,40 +228,46 @@ pub fn candidates(entries: &[Entry], host: &str, monitored: &[String]) -> Vec<Ca
         if monitored.iter().any(|m| m == &entry.id) {
             continue;
         }
-        if entry.probe == "http" || entry.probe == "tcp" {
+        if entry.probe == "process" {
+            // A service with no port is found by its command line. Without this the panel never
+            // offered tailscale or xray at all, even while they were running, because the checks
+            // below only know how to look at ports.
+            if !entry.process_match.is_empty() {
+                if let Ok(svc) = crate::catalog::instantiate(entry, host, None, "") {
+                    let (probe_state, _, _) = crate::probes::probe_process(&svc.target);
+                    if probe_state == crate::probes::STATE_UP {
+                        state = CAND_AVAILABLE;
+                        detail = format!("running ({})", entry.process_match);
+                    }
+                }
+            }
+        } else if entry.probe == "http" || entry.probe == "tcp" {
             match entry.default_port {
                 0 => {}
                 port => {
-                    let holder = listeners.iter().find(|l| l.port == port);
-                    match holder {
-                        None => {
+                    // Connect rather than consult the socket table: an unprivileged process
+                    // cannot see sockets owned by root, which is most of what runs on a server.
+                    let Ok(svc) = crate::catalog::instantiate(entry, host, None, "") else {
+                        continue;
+                    };
+                    if entry.probe == "http" {
+                        let (probe_state, _, _) =
+                            crate::probes::probe_http(&svc.target, svc.expect_status, &svc.contains, svc.timeout);
+                        if probe_state == crate::probes::STATE_UP && entry.has_signature() {
+                            state = CAND_AVAILABLE;
+                            detail = format!("listening on {port}, signature matched");
+                        } else {
+                            state = CAND_NOT_RUNNING;
+                            detail = format!("nothing recognised on {port}");
+                        }
+                    } else {
+                        let (probe_state, _, _) = crate::probes::probe_tcp(&svc.target, svc.timeout);
+                        if probe_state == crate::probes::STATE_UP {
+                            state = CAND_AVAILABLE;
+                            detail = format!("listening on {port} (tcp, no signature to verify)");
+                        } else {
                             state = CAND_NOT_RUNNING;
                             detail = format!("nothing listening on {port}");
-                        }
-                        Some(l) => {
-                            // Verify identity. A port match alone is not evidence: AirPlay holds
-                            // 5000 and answers 403, which a signature-less entry read as "up".
-                            if entry.probe == "http" && entry.has_signature() {
-                                let Ok(svc) = crate::catalog::instantiate(entry, host, None, "") else {
-                                    continue;
-                                };
-                                let (probe_state, _, _) = crate::probes::probe_http(
-                                    &svc.target,
-                                    svc.expect_status,
-                                    &svc.contains,
-                                    svc.timeout,
-                                );
-                                if probe_state == crate::probes::STATE_UP {
-                                    state = CAND_AVAILABLE;
-                                    detail = format!("listening on {port}, signature matched");
-                                } else {
-                                    state = CAND_PORT_TAKEN;
-                                    detail = format!("port {port} is held by {}", l.process);
-                                }
-                            } else if entry.probe == "tcp" {
-                                state = CAND_AVAILABLE;
-                                detail = format!("listening on {port} (tcp, no signature to verify)");
-                            }
                         }
                     }
                 }

@@ -794,7 +794,10 @@ fn route(req: &Request, app: &Arc<App>) -> (u16, String, Vec<u8>, bool) {
             (200, json_ct, json_bytes(&json!({
                 "ok": true,
                 "available": bucket(crate::discover::CAND_AVAILABLE),
-                "not_running": bucket(crate::discover::CAND_NOT_RUNNING),
+                // Deliberately not reported: "not running" was every catalog entry that is not
+                // live, which reads as a list of what you have installed and is wrong — it is the
+                // catalog, not this machine. Only what answered is offered.
+                "not_running": Vec::<String>::new(),
                 "port_taken": bucket(crate::discover::CAND_PORT_TAKEN),
                 "already": bucket(crate::discover::CAND_ALREADY),
             })), false)
