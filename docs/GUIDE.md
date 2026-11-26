@@ -1,4 +1,4 @@
-# observer-frog — the details
+# observer-frog: the details
 
 Everything here was in the README and got too long for it. If you only want to run the thing, the
 README is enough.
@@ -14,7 +14,7 @@ anyone else is looking at it. Two settings decide what leaves the machine.
 | `report_to` | empty | Where this machine sends its own results |
 
 A machine with `enabled = true` and nothing in `report_to` is a head: it collects. A machine with
-`enabled = false` and a `report_to` is a tail: it sends. A machine with neither is idle — it still
+`enabled = false` and a `report_to` is a tail: it sends. A machine with neither is idle. It still
 shows its own numbers, and says in Settings that no head is paired. Nothing crashes, nothing
 restarts.
 
@@ -44,8 +44,8 @@ you:   click one
 ```
 
 Until you click, that request is not a credential: the machine cannot report, and its node does not
-appear in the roster. Approving stores the token's digest — the token itself never travels from head
-to tail — so a stolen database does not hand anyone a working credential. Rejecting leaves the
+appear in the roster. Approving stores the token's digest, so the token itself never travels from head
+to tail and a stolen database does not hand anyone a working credential. Rejecting leaves the
 machine unable to report.
 
 Settings lists machines already paired, and removing one revokes its token for good: it has to ask
@@ -57,7 +57,7 @@ The head stamps arrival time, so a tail with a wrong clock cannot corrupt the re
 idempotent: a retry over a flaky link changes nothing. A tail that stops reporting has its services
 marked unavailable, never down, and you get one notification per node rather than one per service.
 
-When a machine stops acting as head, it forgets every other machine completely — roster, history and
+When a machine stops acting as head, it forgets every other machine completely: roster, history and
 enrolment. That is a real unpairing, not a pause: the machines must ask again afterwards. Keeping
 credentials for hosts it no longer watches would be worse.
 
@@ -66,8 +66,11 @@ clearing it restores the name the machine reports.
 
 ## Adding a service
 
-There is a catalog of about fifty common self-hosted things, each with a default port and, where the
-service exposes one, a signature that proves you are looking at it.
+There is a catalog of 22 common self-hosted things, each with a default port and a signature that
+proves you are looking at it. The list is small on purpose: an entry is data, and a wrong entry
+costs more than a missing one.
+
+The catalog lives behind a gear icon in the header, in three tabs: This Node, Services, and Pairing.
 
 ```bash
 FROG=./target/release/observer-frog
@@ -136,7 +139,7 @@ observer-frog uninstall   # and it is gone
 ```
 
 The same command is how an upgrade lands. It copies the binary somewhere durable, points the service
-at that copy, and restarts it — so `install` after a rebuild is the whole upgrade procedure. A unit
+at that copy, and restarts it. So `install` after a rebuild is the whole upgrade procedure. A unit
 that pointed at `target/release/` would break the first time anyone ran `cargo clean`.
 
 Autostart can also be switched from Settings, which matters on a machine you reach from a phone.
@@ -164,8 +167,9 @@ put Caddy, nginx, WireGuard or Tailscale in front if you would rather not manage
 
 No service control. There is no start or stop endpoint, so a bad token cannot restart anything.
 
-No public status pages and no notification zoo. Two sinks: ntfy, and a generic webhook that accepts a
-JSON POST.
+No public status pages and no notification zoo. Two sinks: ntfy, and a generic webhook that accepts
+a JSON POST. ntfy is preferred because it can be self-hosted, which means it still works when the
+internet does not.
 
 No store-and-forward. A tail that cannot reach the head loses those samples rather than queueing
 them; there is no buffer to drain later.
@@ -191,8 +195,18 @@ surprise you. The catalog is a curated list, not a discovery engine.
 | `/api/ignore` | POST `{id, ignored}` |
 | `/api/health` | liveness |
 | `/api/pair` | GET pending requests and paired machines; POST a request (a tail calls this) |
-| `/api/pair/decide` | POST `{id, approve}` — the tick and the cross |
-| `/api/pair/remove` | POST `{node_id}` — revoke one machine |
+| `/api/pair/ask` | POST `{url}`: write the head and send the request in one call |
+| `/api/pair/decide` | POST `{id, approve}`: the tick and the cross |
+| `/api/pair/remove` | POST `{node_id}`: revoke one machine |
+| `/api/heads` | scan the LAN for heads; never lists this machine |
+| `/api/nodes` | machines this head knows about |
+| `/api/node/name` | POST a display name for this machine |
+| `/api/services`, `/api/services/add`, `/api/services/remove` | what this node watches |
+| `/api/catalog` | the shipped service catalog |
+| `/api/discover/services` | what is running on this machine right now |
+| `/api/settings` | read or change role, interval, autostart |
+| `/api/autostart` | read or set the boot service |
+| `/api/report` | a tail posts here; bearer token required |
 
 Pairing routes are unauthenticated on purpose: the token is not a credential until someone
 approves it. Anything else on the LAN can create a pending request, and only a click on the head
@@ -208,7 +222,7 @@ makes it real.
 ## Tests
 
 ```bash
-cd rust && cargo test        # 106 tests
+cd rust && cargo test        # 108 tests
 ```
 
 Every behavioural rule in `docs/DESIGN.md` has a test named after it. One test does not check
@@ -219,6 +233,6 @@ footprint is the reason this port exists and nothing else would notice a regress
 
 It began in Python. That original is frozen on the `python-v0.1` branch and is no longer part of this
 tree. Rust replaced it for distribution: 2.6 MB, against 48 MB for a single-file Python executable
-that antivirus software flags. `rust/parity.py` verifies the port against the frozen branch — both
+that antivirus software flags. `rust/parity.py` verifies the port against the frozen branch: both
 builds on the same configuration, every endpoint, every service state, every response shape. They
 serve byte-identical web assets. Memory is 8 MB against 40.

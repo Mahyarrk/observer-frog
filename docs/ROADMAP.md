@@ -1,7 +1,7 @@
 # Roadmap
 
 This is the shape of the project from where it stands to 0.7.0. Each version below is a theme, not
-a task list — the detailed plan for a version gets written when that version starts, from this
+a task list. The detailed plan for a version gets written when that version starts, from this
 document.
 
 Everything here is scoped by one rule: the thing must earn its place. A feature that adds a
@@ -22,7 +22,7 @@ dependency, a moving part, or an attack surface needs a reason stronger than "it
 
 ---
 
-## 0.5.0 — Close the door
+## 0.5.0: close the door
 
 **Why first:** the admin API is unauthenticated and reachable on the plain-HTTP report port. Anyone
 on the LAN can add services, flip the role, approve pairing requests or unpair machines. This is the
@@ -37,7 +37,7 @@ only item on the roadmap where doing nothing is an active exposure.
 - **Ingest keeps its own scheme.** Tails authenticate with their bearer token and cannot hold a
   session. Two schemes coexist deliberately: token for machines, session for people.
 - **TLS import in Settings.** The operator generates a certificate and imports it; the product never
-  mints one. Path plus validation — the pair must parse, match each other, and the certificate must
+  mints one. Path plus validation: the pair must parse, match each other, and the certificate must
   be readable. Applies on restart, because a listener binds at boot.
 - **GUI first.** Anything the CLI can do with certificates must be doable from the dashboard.
 
@@ -56,7 +56,7 @@ Per-user accounts. Roles. 2FA. Password recovery. One operator, one password.
 
 ---
 
-## 0.6.0 — Notifications that reach you
+## 0.6.0: notifications that reach you
 
 **Why:** the dashboard answers when you look at it. This is the version where it tells you without
 being asked.
@@ -75,7 +75,7 @@ being asked.
 
 ### Not in scope
 
-Per-service or per-severity routing. Digest and quiet hours. Telegram and SimpleX — 0.7.0.
+Per-service or per-severity routing. Digest and quiet hours. Telegram and SimpleX, in 0.7.0.
 
 ### Done when
 
@@ -86,11 +86,11 @@ Per-service or per-severity routing. Digest and quiet hours. Telegram and Simple
 
 ---
 
-## 0.7.0 — More routes, and the record
+## 0.7.0: more routes, and the record
 
 ### Scope
 
-- **Telegram sink**, through the existing per-sink `use_proxy` — the field has been in the config
+- **Telegram sink**, through the existing per-sink `use_proxy`. The field has been in the config
   since 0.2 and has had no sink that needs it.
 - **SimpleX sink**, for the same reason: it is the one the operator already runs.
 - **Metrics graphs.** The data is already there: `hourly_rollup` keeps 30 days of up/down/degraded
@@ -112,7 +112,7 @@ Per-service or per-severity routing. Digest and quiet hours. Telegram and Simple
 - Each sink can be enabled and disabled alone, and a failure in one does not suppress another.
 - Graphs render 30 days of uptime and latency without a new query pattern.
 - Windows: the binary installs, starts at login, and survives a reboot.
-- Ubuntu and Arch: same, each on a real install — not a Debian box wearing the name — including a
+- Ubuntu and Arch: same, each on a real install (not a Debian box wearing the name), including a
   reboot and an upgrade on Arch to catch what rolling release breaks.
 - Three machines and then four: all report, all appear, pairing approves each, and removing one
   leaves the others untouched.
@@ -148,7 +148,7 @@ These have been decided against, and are recorded so they are not re-argued:
 Recorded here so a later version answers them deliberately:
 
 1. **Platform breadth.** Windows, Ubuntu and Arch are all scheduled for 0.7.0. If any of the three
-   turns out to need more than a unit file — Windows probably will — it splits into its own release
+   turns out to need more than a unit file (Windows probably will), it splits into its own release
    rather than delaying the others.
 2. **Graph granularity.** Per-service first, or per-node first.
 3. **Push client.** Whether to depend on a web-push crate or implement VAPID and payload encryption

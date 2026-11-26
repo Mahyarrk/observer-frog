@@ -40,12 +40,14 @@ report_to = ""       # empty: it sends nothing anywhere
 Set `enabled = false` and give `report_to` an address to make a machine report to another instead.
 A machine with neither is idle, not broken: it still shows its own numbers.
 
-Pairing happens in Settings. A tail asks to join, the head shows the request with a tick and a cross,
-and nothing is trusted until you click — the token travels one way, and only its digest is stored.
+Pairing happens in Settings, in the Pairing tab. Scan the LAN, pick the head, and the request goes
+out; the head shows it with a tick and a cross, and nothing is trusted until you click. The token
+travels one way and only its digest is stored, so a stolen database hands nobody a working
+credential.
 
 ## Adding a service
 
-There is a catalog of about fifty common self-hosted things, or you can write a probe by hand.
+There is a catalog of 22 common self-hosted things, or you can write a probe by hand.
 
 ```bash
 observer-frog catalog              # what is available
@@ -53,7 +55,8 @@ observer-frog add syncthing        # prints a config block to paste
 observer-frog discover             # what is running on this machine right now
 ```
 
-The same actions are in the dashboard's Settings page, with custom ports and removal.
+The same actions are behind the gear icon in the header, in the Services tab, with custom ports
+and removal.
 
 ## More
 
