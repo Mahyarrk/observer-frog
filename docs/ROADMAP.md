@@ -50,8 +50,9 @@ Per-user accounts. Roles. 2FA. Password recovery. One operator, one password.
 - Every `/api/*` write returns 401 without a session.
 - A call to the admin API on the report port is refused.
 - The phone loads the dashboard over HTTPS with an imported certificate.
-- The six unrun tests from 0.4.0 pass: both-to-head, both-to-tail, mid-report flip, third machine,
-  pending-request persistence, fresh install.
+- The five remaining 0.4.0 tests pass: both-to-head, both-to-tail, mid-report flip,
+  pending-request persistence, fresh install. (The third- and fourth-machine test belongs to 0.7.0,
+  with the rest of the multi-device work.)
 
 ---
 
@@ -95,15 +96,26 @@ Per-service or per-severity routing. Digest and quiet hours. Telegram and Simple
 - **Metrics graphs.** The data is already there: `hourly_rollup` keeps 30 days of up/down/degraded
   counts and latency sums. This is frontend work over an existing table, not new collection.
 - **Windows.** The first honest attempt at autostart (Task Scheduler). Until this lands, `install`
-  refuses on Windows and the dashboard works without a service. Largest unknown on the roadmap;
-  may be split into its own release.
+  refuses on Windows and the dashboard works without a service.
+- **Ubuntu and Arch.** The user unit has only been proven on Debian 13. Ubuntu and Arch both ship
+  systemd and lingering, but their packaged tooling, firewall defaults and `ss` output are not
+  identical, and "it is Linux" is not a test result. Arch in particular is rolling: the point is to
+  find out what breaks on a system that updates underneath the binary, not to declare it supported
+  from a single install. Support means installed, enabled and surviving a reboot on real machines.
+- **Three and four machines.** Two nodes have been proven. Three and four exercise what two cannot:
+  roster ordering, the pairing list with several pending requests, and one card per machine at a
+  scale where a wrong node id stops being invisible. This is the test the 0.4.0 pairing work never
+  had.
 
 ### Done when
 
 - Each sink can be enabled and disabled alone, and a failure in one does not suppress another.
 - Graphs render 30 days of uptime and latency without a new query pattern.
-- Windows: the binary installs, starts at login, and survives a reboot — or the version ships
-  without Windows and says so plainly.
+- Windows: the binary installs, starts at login, and survives a reboot.
+- Ubuntu and Arch: same, each on a real install — not a Debian box wearing the name — including a
+  reboot and an upgrade on Arch to catch what rolling release breaks.
+- Three machines and then four: all report, all appear, pairing approves each, and removing one
+  leaves the others untouched.
 
 ---
 
@@ -135,7 +147,9 @@ These have been decided against, and are recorded so they are not re-argued:
 
 Recorded here so a later version answers them deliberately:
 
-1. **Windows timing.** Whether it is 0.7.0 or its own release.
+1. **Platform breadth.** Windows, Ubuntu and Arch are all scheduled for 0.7.0. If any of the three
+   turns out to need more than a unit file — Windows probably will — it splits into its own release
+   rather than delaying the others.
 2. **Graph granularity.** Per-service first, or per-node first.
 3. **Push client.** Whether to depend on a web-push crate or implement VAPID and payload encryption
    in-tree. The encryption is nontrivial; the dependency is small.
