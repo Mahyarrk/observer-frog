@@ -927,7 +927,9 @@ fn route(
                 "has_password": has,
                 // Signed in with the default: the app stays shut until it is replaced.
                 "must_change": must_change && authed,
-                "default_password": crate::auth::DEFAULT_PASSWORD,
+                // Not the password itself: just whether this machine still has the default, so the
+                // login screen can mention it once and stop.
+                "first_run": must_change,
             })), true)
         }
         ("POST", p) if p == "/api/auth/login" || p == "/status/api/auth/login" => {

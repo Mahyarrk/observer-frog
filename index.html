@@ -2416,7 +2416,7 @@
       const API_BASE = (window.location.pathname.replace(/\/$/, '') || '');
       // Bump on every shell change. Declared before first use: a `const` referenced above its
       // declaration throws a TDZ error and takes the whole script down (it did).
-      const BUILD = 'of-36';
+      const BUILD = 'of-37';
       // Show the address actually in use, not a baked-in host.
       (function () {
         const el = document.getElementById('brand-url');
@@ -2623,7 +2623,10 @@
           showApp();
           return;
         }
-        showGate('login', 'Sign in to see this dashboard.');
+        // A fresh install has a known default, so the screen says it and the API does not.
+        showGate('login', (d && d.must_change === false && d.first_run)
+          ? 'First run. Sign in with 123456, then choose your own password.'
+          : 'Sign in to see this dashboard.');
       }
 
       function submitOnce(formId, buttonId, work) {
