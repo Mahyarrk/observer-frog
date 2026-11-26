@@ -58,6 +58,31 @@ pub fn advertisement(name: &str, url: &str, report_port: Option<u16>, version: &
 
 /// Parse an answer. Returns `None` for anything that is not one of ours, so a stray packet on the
 /// port cannot make the tail believe it found a head.
+/// Swap a wildcard host for the address the answer arrived from.
+///
+/// `bind = "0.0.0.0"` means "listen everywhere" and is advertised as-is, because that is the honest
+/// description of what a node is listening on. But it is not an address anyone can dial: a client
+/// told to report to `0.0.0.0:8771` reports to itself. The packet header already carries the sender's
+/// address, and it is by definition one that reaches that machine — so the advertisement states the
+/// port and the packet states the address.
+fn reachable(url: String, from: SocketAddr) -> String {
+    let wildcard_host = url
+        .strip_prefix("http://")
+        .or_else(|| url.strip_prefix("https://"))
+        .map(|rest| rest.split(':').next().unwrap_or(""))
+        .unwrap_or("");
+    if !matches!(wildcard_host, "0.0.0.0" | "[::]" | "::") {
+        return url;
+    }
+    match url.split_once("://") {
+        Some((scheme, rest)) => {
+            let port_part = rest.split_once(':').map(|(_, p)| p).unwrap_or("");
+            format!("{scheme}://{}:{port_part}", from.ip())
+        }
+        None => url,
+    }
+}
+
 pub fn parse_head(body: &[u8], from: SocketAddr) -> Option<Head> {
     let v: Value = match serde_json::from_slice(body) {
         Ok(v) => v,
@@ -66,9 +91,10 @@ pub fn parse_head(body: &[u8], from: SocketAddr) -> Option<Head> {
     if v.get("observer_frog").and_then(|x| x.as_str()) != Some("head") {
         return None;
     }
+    let url = v.get("url").and_then(|x| x.as_str()).unwrap_or("").to_string();
     Some(Head {
         name: v.get("name").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-        url: v.get("url").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+        url: reachable(url, from),
         report_port: v.get("report_port").and_then(|x| x.as_u64()).map(|p| p as u16),
         version: v.get("version").and_then(|x| x.as_str()).unwrap_or("").to_string(),
         from,
@@ -137,8 +163,11 @@ pub fn find_heads(window: Duration) -> Vec<Head> {
         match sock.recv_from(&mut buf) {
             Ok((n, from)) => {
                 if let Some(h) = parse_head(&buf[..n], from) {
-                    // A head answering twice (broadcast and loopback) is one head.
-                    if !found.iter().any(|x| x.url == h.url) {
+                    // One answer per sender. Keyed on the responder's address, not its URL: every
+                    // node advertises the same wildcard URL, so URL identity would treat two
+                    // machines as one. The same machine answering twice (broadcast and loopback)
+                    // still collapses to one entry.
+                    if !found.iter().any(|x| x.from.ip() == h.from.ip()) {
                         found.push(h);
                     }
                 }
@@ -163,6 +192,21 @@ mod tests {
         let h = parse_head(&body, addr()).expect("its own advertisement must parse");
         assert_eq!(h.name, "head-box");
         assert_eq!(h.report_port, Some(8771));
+    }
+
+    #[test]
+    fn a_wildcard_advertisement_becomes_the_senders_address() {
+        // Every node binds 0.0.0.0 and advertises it. A client that dialled that would call itself.
+        let body = advertisement("head-box", "http://0.0.0.0:8770/", Some(8771), "0.4.0");
+        let from: SocketAddr = "192.168.2.105:8790".parse().unwrap();
+        let h = parse_head(&body, from).unwrap();
+        assert_eq!(h.url, "http://192.168.2.105:8770/");
+        assert_eq!(h.report_port, Some(8771));
+
+        // A real address is left alone, so a node that binds a specific interface keeps it.
+        let body = advertisement("head-box", "http://10.0.0.5:8770/", Some(8771), "0.4.0");
+        let h = parse_head(&body, from).unwrap();
+        assert_eq!(h.url, "http://10.0.0.5:8770/");
     }
 
     #[test]
