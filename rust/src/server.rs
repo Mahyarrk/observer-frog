@@ -926,7 +926,15 @@ fn route(req: &Request, app: &Arc<App>) -> (u16, String, Vec<u8>, bool) {
             // shortcut: matched by node name, so two machines sharing a name would hide each other;
             // upgrade to a per-install uuid in the advertisement if that ever happens.
             let found = crate::lan::find_heads(std::time::Duration::from_millis(1500));
-            let heads: Vec<Value> = found.iter().filter(|h| h.name != me).map(|h| h.to_json()).collect();
+            // Only a node that advertises a report port will accept reports, so only those are
+            // heads worth pairing with. Every machine answers discovery with its dashboard port,
+            // which is how a tail stays findable — listing it here offered a head that cannot
+            // collect, and pairing with it wrote an address nothing was listening on.
+            let heads: Vec<Value> = found
+                .iter()
+                .filter(|h| h.name != me && h.report_port.is_some())
+                .map(|h| h.to_json())
+                .collect();
             (200, json_ct, json_bytes(&json!({
                 "ok": true, "found": heads.len(), "heads": heads,
             })), false)

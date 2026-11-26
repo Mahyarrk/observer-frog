@@ -221,11 +221,20 @@ pub fn candidates(entries: &[Entry], host: &str, monitored: &[String]) -> Vec<Ca
         let mut state = CAND_NOT_RUNNING;
         let mut detail = String::new();
 
-        // Already-monitored entries are not discovery results. Listing them said "found" about a
-        // service the sweep never looked for — searxng on a moved port appeared as found simply
-        // because it was in the config — and the same list is what made every catalog entry look
-        // installed. Discovery reports what it actually found, and nothing else.
-        if monitored.iter().any(|m| m == &entry.id) {
+        // Already-monitored entries are reported as themselves, not as discoveries. Listing them
+        // as "found" said a service had been detected when it was only present in the config, so
+        // they get their own state and the panel shows them muted under "Monitored".
+        if monitored.iter().any(|m| m == &entry.id || m.starts_with(&format!("{}-", entry.id))) {
+            out.push(Candidate {
+                id: entry.id.clone(),
+                name: entry.name.clone(),
+                group: entry.group.clone(),
+                probe: entry.probe.clone(),
+                default_port: entry.default_port,
+                expected_off: entry.expected_off,
+                detail: "in this node's config".to_string(),
+                state: CAND_ALREADY,
+            });
             continue;
         }
         if entry.probe == "process" {
