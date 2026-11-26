@@ -582,6 +582,17 @@
       display: flex; flex-direction: column; gap: 10px;
       margin-top: 10px; padding-top: 12px;
       border-top: 1px solid var(--border-subtle);
+      /* `display: flex` overrides the `hidden` attribute, which is why this panel used to show
+         before Discover was pressed. Say it explicitly rather than relying on the default. */
+      animation: panel-in 0.22s ease-out;
+    }
+    .settings-add-panel[hidden] { display: none; }
+    @keyframes panel-in {
+      from { opacity: 0; transform: translateY(-4px); }
+      to   { opacity: 1; transform: none; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .settings-add-panel { animation: none; }
     }
     .settings-sub {
       font-size: 12px; font-weight: 600; margin: 6px 0 0; opacity: .85;
@@ -2215,7 +2226,7 @@
       const API_BASE = (window.location.pathname.replace(/\/$/, '') || '');
       // Bump on every shell change. Declared before first use: a `const` referenced above its
       // declaration throws a TDZ error and takes the whole script down (it did).
-      const BUILD = 'of-31';
+      const BUILD = 'of-32';
       // Show the address actually in use, not a baked-in host.
       (function () {
         const el = document.getElementById('brand-url');
@@ -3475,12 +3486,15 @@
         });
         on('set-add-open', async () => {
           const panel = document.getElementById('set-add-panel');
+          const btn = document.getElementById('set-add-open');
           if (!panel) return;
-          panel.hidden = !panel.hidden;
-          if (!panel.hidden) {
+          const opening = panel.hidden;
+          panel.hidden = !opening;
+          if (btn) btn.textContent = opening ? 'Hide discovery' : 'Discover services';
+          if (opening) {
+            // Filled on demand: the probe sweep costs a second per entry, and an empty panel
+            // sitting open on every visit made the page look like it was already scanning.
             loadCandidates();
-            // The picker is always on screen now, so its list has to be filled here rather than
-            // by a button that used to reveal it.
             loadCatalog();
           }
         });
