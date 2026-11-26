@@ -242,7 +242,7 @@ mod tests {
     #[test]
     fn a_request_is_not_a_credential_until_it_is_approved() {
         let db = fresh("approve");
-        request(&db, "laptop", "Mahyar-Linux", "secret-token", "192.0.2.5", 30).unwrap();
+        request(&db, "laptop", "test-machine", "secret-token", "192.0.2.5", 30).unwrap();
         assert_eq!(pending(&db).len(), 1);
         // The whole point: before approval this token is not recognised, so the machine cannot
         // report and cannot appear in the roster.

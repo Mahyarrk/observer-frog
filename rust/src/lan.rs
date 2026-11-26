@@ -198,9 +198,9 @@ mod tests {
     fn a_wildcard_advertisement_becomes_the_senders_address() {
         // Every node binds 0.0.0.0 and advertises it. A client that dialled that would call itself.
         let body = advertisement("head-box", "http://0.0.0.0:8770/", Some(8771), "0.4.0");
-        let from: SocketAddr = "192.168.2.105:8790".parse().unwrap();
+        let from: SocketAddr = "192.0.2.10:8790".parse().unwrap();
         let h = parse_head(&body, from).unwrap();
-        assert_eq!(h.url, "http://192.168.2.105:8770/");
+        assert_eq!(h.url, "http://192.0.2.10:8770/");
         assert_eq!(h.report_port, Some(8771));
 
         // A real address is left alone, so a node that binds a specific interface keeps it.
