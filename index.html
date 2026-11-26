@@ -591,8 +591,22 @@
       from { opacity: 0; transform: translateY(-4px); }
       to   { opacity: 1; transform: none; }
     }
+    /* A menu drops from the control that opened it, so its rise is the same motion at a smaller
+       distance. Anything that was already on screen when the page loaded must not animate. */
+    @keyframes menu-in {
+      from { opacity: 0; transform: translateY(-6px); }
+      to   { opacity: 1; transform: none; }
+    }
+    /* Lists that fill in after a fetch: no transform, since the row heights are already moving. */
+    @keyframes list-in {
+      from { opacity: 0; }
+      to   { opacity: 1; }
+    }
+    .svc-picker-menu:not([hidden]) { animation: menu-in 0.16s ease-out; }
+    .settings-heads:not(:empty) { animation: list-in 0.2s ease-out; }
+    .settings-head:only-child { animation: list-in 0.2s ease-out; }
     @media (prefers-reduced-motion: reduce) {
-      .settings-add-panel { animation: none; }
+      .settings-add-panel, .svc-picker-menu, .settings-heads, .settings-head { animation: none; }
     }
     .settings-sub {
       font-size: 12px; font-weight: 600; margin: 6px 0 0; opacity: .85;
@@ -2226,7 +2240,7 @@
       const API_BASE = (window.location.pathname.replace(/\/$/, '') || '');
       // Bump on every shell change. Declared before first use: a `const` referenced above its
       // declaration throws a TDZ error and takes the whole script down (it did).
-      const BUILD = 'of-32';
+      const BUILD = 'of-33';
       // Show the address actually in use, not a baked-in host.
       (function () {
         const el = document.getElementById('brand-url');
