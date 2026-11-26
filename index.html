@@ -309,6 +309,25 @@
       animation: rotate360 0.65s cubic-bezier(0.4, 0, 0.2, 1) infinite;
     }
 
+    /* Gear above refresh: two square buttons in the space one row used to take. */
+    .header-btn-stack {
+      display: flex;
+      flex-direction: column;
+      gap: 0.375rem;
+      flex-shrink: 0;
+    }
+
+    .header-btn-stack .header-refresh-btn {
+      width: 2.75rem;
+      height: 2.75rem;
+    }
+
+    .gear-btn.is-open {
+      background: rgba(59, 130, 246, 0.18);
+      border-color: rgba(59, 130, 246, 0.45);
+      color: var(--accent-blue);
+    }
+
     /* Sub-bar: Navigation / Tab / Scope Info */
     .header-sub-row {
       display: flex;
@@ -408,6 +427,42 @@
 
     /* ---- Settings (v0.3 admin GUI) ---- */
     .settings-wrap { display: flex; flex-direction: column; gap: 14px; padding: 16px; }
+    /* Inner tabs: the settings page carries three unrelated jobs, and one long scroll mixed them. */
+    .settings-subnav {
+      display: flex;
+      gap: 0.25rem;
+      padding: 0.25rem;
+      border-radius: var(--r-md);
+      background: rgba(15, 23, 42, 0.85);
+      border: 1px solid rgba(148, 163, 184, 0.18);
+      margin-bottom: 0.75rem;
+    }
+
+    .settings-subtab {
+      flex: 1;
+      min-height: 38px;
+      padding: 0.4rem 0.5rem;
+      border: none;
+      border-radius: calc(var(--r-md) - 3px);
+      background: transparent;
+      color: var(--text-dim);
+      font: inherit;
+      font-size: 0.8rem;
+      letter-spacing: 0.02em;
+      cursor: pointer;
+      transition: background 0.15s ease, color 0.15s ease;
+    }
+
+    .settings-subtab:hover { color: var(--text); }
+
+    .settings-subtab.active {
+      background: rgba(59, 130, 246, 0.2);
+      color: var(--accent-blue);
+      font-weight: 600;
+    }
+
+    .settings-panel[hidden] { display: none; }
+
     .settings-card {
       background: var(--bg-card);
       border: 1px solid var(--border-subtle);
@@ -1802,6 +1857,13 @@
           <span class="divider">|</span>
           <span>Next: <strong id="countdown-text" class="poll-count">60s</strong></span>
         </div>
+        <div class="header-btn-stack">
+        <button id="gear-btn" class="header-refresh-btn gear-btn" type="button" title="Settings" aria-label="Open settings">
+          <svg id="gear-icon" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+          </svg>
+        </button>
         <button id="refresh-btn" class="header-refresh-btn" type="button" title="Refresh status now" aria-label="Refresh status now">
           <svg id="refresh-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path>
@@ -1810,6 +1872,7 @@
             <path d="M16 16h5v5"></path>
           </svg>
         </button>
+        </div>
       </div>
 
       <!-- Row 3: Navigation and Scope -->
@@ -1825,10 +1888,7 @@
             <span>History</span>
             <span class="tab-badge" id="tab-badge-history">--</span>
           </button>
-          <button class="nav-tab-btn" id="tab-btn-settings" type="button">
-            <span>⚙️</span>
-            <span>Settings</span>
-          </button>
+
         </div>
         <div class="node-bar" id="node-bar" hidden>
           <label class="node-bar-label" for="node-select">NODE</label>
@@ -1886,6 +1946,13 @@
           there is no authentication in this version.
         </p>
 
+        <div class="settings-subnav" role="tablist">
+          <button class="settings-subtab active" type="button" role="tab" data-subtab="node">This Node</button>
+          <button class="settings-subtab" type="button" role="tab" data-subtab="services">Services</button>
+          <button class="settings-subtab" type="button" role="tab" data-subtab="pairing">Pairing</button>
+        </div>
+
+        <div class="settings-panel" data-panel="node">
         <div class="settings-card">
           <h2 class="settings-title">This Node</h2>
           <div class="settings-rows" id="settings-node-rows">
@@ -1894,7 +1961,6 @@
             <div class="settings-row"><span>Database</span><code id="set-db">—</code></div>
           </div>
         </div>
-
         <div class="settings-card">
           <h2 class="settings-title">Role</h2>
           <p class="settings-hint">
@@ -1916,7 +1982,29 @@
           <button class="settings-btn" id="set-save-role" type="button">Save role</button>
           <p class="settings-note" id="set-role-note"></p>
         </div>
+        <div class="settings-card">
+          <h2 class="settings-title">Polling</h2>
+          <label class="settings-field">
+            <span>Interval (seconds)</span>
+            <input type="number" id="set-interval" min="1" max="3600" />
+          </label>
+          <button class="settings-btn" id="set-save-interval" type="button">Save interval</button>
+          <p class="settings-note" id="set-interval-note"></p>
+        </div>
+        <div class="settings-card">
+          <h2 class="settings-title">Autostart</h2>
+          <p class="settings-hint" id="set-autostart-hint">
+            Starts this node at boot. The service definition is written by the binary itself.
+          </p>
+          <label class="settings-check">
+            <input type="checkbox" id="set-autostart" />
+            <span>Run at boot</span>
+          </label>
+          <p class="settings-note" id="set-autostart-note"></p>
+        </div>
+        </div>
 
+        <div class="settings-panel" data-panel="services" hidden>
         <div class="settings-card">
           <h2 class="settings-title">Services</h2>
           <p class="settings-hint">
@@ -1967,7 +2055,9 @@
             </div>
           </div>
         </div>
+        </div>
 
+        <div class="settings-panel" data-panel="pairing" hidden>
         <div class="settings-card" id="pair-card">
           <h2 class="settings-title">Pairing requests</h2>
           <p class="settings-hint">
@@ -1982,7 +2072,6 @@
           </p>
           <div id="paired-list" class="pair-list"></div>
         </div>
-
         <div class="settings-card">
           <h2 class="settings-title">Find a head on this network</h2>
           <p class="settings-hint">
@@ -1991,28 +2080,8 @@
           <button class="settings-btn" id="set-scan" type="button">Scan</button>
           <div id="set-heads" class="settings-heads"></div>
         </div>
-
-        <div class="settings-card">
-          <h2 class="settings-title">Polling</h2>
-          <label class="settings-field">
-            <span>Interval (seconds)</span>
-            <input type="number" id="set-interval" min="1" max="3600" />
-          </label>
-          <button class="settings-btn" id="set-save-interval" type="button">Save interval</button>
-          <p class="settings-note" id="set-interval-note"></p>
         </div>
 
-        <div class="settings-card">
-          <h2 class="settings-title">Autostart</h2>
-          <p class="settings-hint" id="set-autostart-hint">
-            Starts this node at boot. The service definition is written by the binary itself.
-          </p>
-          <label class="settings-check">
-            <input type="checkbox" id="set-autostart" />
-            <span>Run at boot</span>
-          </label>
-          <p class="settings-note" id="set-autostart-note"></p>
-        </div>
       </div>
     </section>
 
@@ -2099,7 +2168,7 @@
       const API_BASE = (window.location.pathname.replace(/\/$/, '') || '');
       // Bump on every shell change. Declared before first use: a `const` referenced above its
       // declaration throws a TDZ error and takes the whole script down (it did).
-      const BUILD = 'of-23';
+      const BUILD = 'of-24';
       // Show the address actually in use, not a baked-in host.
       (function () {
         const el = document.getElementById('brand-url');
@@ -2897,7 +2966,6 @@
 
       // ---------------- Settings tab (v0.3 admin GUI, no auth by design) ----------------
       const elViewSettings = document.getElementById('view-settings');
-      const elTabSettings = document.getElementById('tab-btn-settings');
 
       function settingsNote(msg, target) {
         // One note per card: writing every message into the autostart note made "role saved" look
@@ -3491,8 +3559,6 @@
             if (box) box.textContent = 'scan failed: ' + e;
           }
         });
-        const live = document.getElementById('tab-btn-settings');
-        if (live) live.addEventListener('click', () => switchTab('settings'));
       }
 
       // ---------------- History tab (incident log + 30-day uptime) ----------------
@@ -3535,10 +3601,21 @@
         return d.toLocaleDateString([], { month: 'short', day: '2-digit' }) + ' ' + time;
       }
 
+      const GEAR_ICON = '<svg id="gear-icon" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+        '<circle cx="12" cy="12" r="3"></circle>' +
+        '<path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>';
+      // Dashboard: the way back. Distinct from the gear at a glance, not a gear with a highlight.
+      const DASH_ICON = '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+        '<rect x="3" y="3" width="7" height="9" rx="1.5"></rect>' +
+        '<rect x="14" y="3" width="7" height="5" rx="1.5"></rect>' +
+        '<rect x="14" y="12" width="7" height="9" rx="1.5"></rect>' +
+        '<rect x="3" y="16" width="7" height="5" rx="1.5"></rect></svg>';
+
       function switchTab(tab) {
         activeTab = (tab === 'history' || tab === 'settings') ? tab : 'live';
         const views = { live: elViewLive, history: elViewHistory, settings: elViewSettings };
-        const tabs = { live: elTabLive, history: elTabHistory, settings: elTabSettings };
+        // Settings is reached by the gear, not a nav tab, so it has no button in this map.
+        const tabs = { live: elTabLive, history: elTabHistory };
         for (const name of ['live', 'history', 'settings']) {
           if (views[name]) views[name].classList.toggle('view-hidden', name !== activeTab);
           if (tabs[name]) tabs[name].classList.toggle('active', name === activeTab);
@@ -3554,6 +3631,15 @@
           loadServices();
           loadCatalog();
           loadPairing();
+        }
+        // The gear becomes a dashboard icon while settings is open: tapping it is "go back", and
+        // an icon that still looked like a gear would suggest it opens something else.
+        const gear = document.getElementById('gear-btn');
+        if (gear) {
+          gear.classList.toggle('is-open', activeTab === 'settings');
+          gear.title = activeTab === 'settings' ? 'Back to dashboard' : 'Settings';
+          gear.setAttribute('aria-label', gear.title);
+          gear.innerHTML = activeTab === 'settings' ? DASH_ICON : GEAR_ICON;
         }
         try { localStorage.setItem(ACTIVE_TAB_KEY, activeTab); } catch (_) {}
       }
@@ -3676,6 +3762,33 @@
       if (elHistoryReload) elHistoryReload.addEventListener('click', () => fetchHistory(true));
 
       // Event Listeners
+      // Inner settings tabs. Purely presentational: every panel is populated exactly as before,
+      // and the poll keeps refreshing all of them, so hiding one changes nothing but the scroll.
+      function switchSettingsTab(name) {
+        document.querySelectorAll('.settings-subtab').forEach((b) => {
+          b.classList.toggle('active', b.dataset.subtab === name);
+        });
+        document.querySelectorAll('.settings-panel').forEach((el) => {
+          el.hidden = el.dataset.panel !== name;
+        });
+        try { localStorage.setItem('of-settings-subtab', name); } catch (_) {}
+      }
+
+      document.querySelectorAll('.settings-subtab').forEach((b) => {
+        b.addEventListener('click', () => switchSettingsTab(b.dataset.subtab));
+      });
+      try {
+        const saved = localStorage.getItem('of-settings-subtab');
+        if (saved) switchSettingsTab(saved);
+      } catch (_) {}
+
+      const elGearBtn = document.getElementById('gear-btn');
+      if (elGearBtn) {
+        elGearBtn.addEventListener('click', () => {
+          switchTab(activeTab === 'settings' ? 'live' : 'settings');
+        });
+      }
+
       elRefreshBtn.addEventListener('click', () => {
         fetchStatus(true);
       });
