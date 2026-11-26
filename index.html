@@ -473,6 +473,7 @@
       border: 1px solid var(--border-subtle);
     }
     .settings-btn:hover { background: var(--bg-card-hover); }
+    .settings-btn:active { background: var(--bg-card-hover); transform: translateY(1px); }
     .settings-btn:disabled { opacity: .5; cursor: default; }
     .settings-heads { display: flex; flex-direction: column; gap: 8px; }
     .settings-add { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
@@ -1924,15 +1925,12 @@
           </p>
           <div id="set-services" class="settings-heads"></div>
           <p class="settings-note" id="set-services-note"></p>
-          <button class="settings-btn" id="set-add-open" type="button">Add service</button>
+          <button class="settings-btn" id="set-add-open" type="button">Discover services</button>
 
           <div id="set-add-panel" class="settings-add-panel" hidden>
             <h3 class="settings-sub">Running on this machine</h3>
             <p class="settings-hint">Only a service whose signature checks out appears here.</p>
             <div id="set-cand-available" class="settings-heads"></div>
-
-            <h3 class="settings-sub">Installed, not running</h3>
-            <div id="set-cand-notrunning" class="settings-heads"></div>
 
             <h3 class="settings-sub">Already on this dashboard</h3>
             <div id="set-cand-already" class="settings-heads"></div>
@@ -1943,16 +1941,11 @@
             </p>
             <div id="set-cand-taken" class="settings-heads"></div>
 
-            <div class="settings-add">
-              <button class="settings-btn" id="set-not-listed" type="button">
-                Your service is not here?
-              </button>
-            </div>
-            <div id="set-custom" class="settings-custom" hidden>
-              <p class="settings-hint">
-                Pick any supported service, then give the port it actually listens on. The same
-                signature check runs before it is accepted.
-              </p>
+            <p class="settings-hint">
+              Your service is not here? Pick it from the list below and give the port it actually
+              listens on. The same signature check runs before it is accepted.
+            </p>
+            <div id="set-custom" class="settings-custom">
               <div class="settings-add">
                 <div class="svc-picker" id="svc-picker">
                   <button class="svc-picker-btn" id="svc-picker-btn" type="button"
@@ -1970,8 +1963,8 @@
                 <input type="number" id="set-catalog-port" placeholder="port" min="1" max="65535" />
                 <button class="settings-btn" id="set-add-service" type="button">Verify and add</button>
               </div>
+              <p class="settings-note" id="set-add-note"></p>
             </div>
-            <p class="settings-note" id="set-add-note"></p>
           </div>
         </div>
 
@@ -2106,7 +2099,7 @@
       const API_BASE = (window.location.pathname.replace(/\/$/, '') || '');
       // Bump on every shell change. Declared before first use: a `const` referenced above its
       // declaration throws a TDZ error and takes the whole script down (it did).
-      const BUILD = 'of-18';
+      const BUILD = 'of-19';
       // Show the address actually in use, not a baked-in host.
       (function () {
         const el = document.getElementById('brand-url');
@@ -3044,7 +3037,6 @@
         };
         const add = (it) => addCatalogService(it.id, it.default_port);
         paint('set-cand-available', d.available, 'Add', add, false);
-        paint('set-cand-notrunning', d.not_running, 'Add', add, true);
         // Already-monitored services stay in the list, clearly marked. An empty "available" bucket
         // used to read as "nothing can be added", which was strictly speaking true and completely
         // useless when what you wanted was to find a service you already run.
@@ -3317,14 +3309,14 @@
           const panel = document.getElementById('set-add-panel');
           if (!panel) return;
           panel.hidden = !panel.hidden;
-          if (!panel.hidden) loadCandidates();
+          if (!panel.hidden) {
+            loadCandidates();
+            // The picker is always on screen now, so its list has to be filled here rather than
+            // by a button that used to reveal it.
+            loadCatalog();
+          }
         });
-        on('set-not-listed', () => {
-          const c = document.getElementById('set-custom');
-          if (!c) return;
-          c.hidden = !c.hidden;
-          if (!c.hidden) loadCatalog();
-        });
+
         on('svc-picker-btn', () => {
           const menu = document.getElementById('svc-picker-menu');
           const btn = document.getElementById('svc-picker-btn');
@@ -3338,6 +3330,15 @@
           }
         });
         // Anywhere outside closes it, the way a native menu behaves.
+        //
+        // Capture phase, and on pointerdown rather than click: the open menu is absolutely
+        // positioned over the port field and the add button, so a tap meant for them landed on the
+        // menu and only closed it. The press that closes the menu has to be the same press that
+        // reaches the control it was aimed at.
+        document.addEventListener('pointerdown', (ev) => {
+          const picker = document.getElementById('svc-picker');
+          if (picker && !picker.contains(ev.target)) closePicker();
+        }, true);
         document.addEventListener('click', (ev) => {
           const picker = document.getElementById('svc-picker');
           if (picker && !picker.contains(ev.target)) closePicker();
@@ -3347,9 +3348,15 @@
         });
         on('set-add-service', async () => {
           const port = document.getElementById('set-catalog-port');
-          const note = document.getElementById('set-services-note');
+          const btn = document.getElementById('set-add-service');
+          // The note belongs beside this button, not at the top of the card where nothing said
+          // the press had landed.
+          const note = document.getElementById('set-add-note');
           const cid = pickedService ? pickedService.id : '';
           if (!cid) { if (note) note.textContent = 'pick a service first'; return; }
+          // A verify can take a moment; without a visible state the tap reads as ignored.
+          if (note) note.textContent = 'verifying…';
+          if (btn) btn.disabled = true;
           try {
             const body = { catalog_id: cid };
             if (port && port.value) body.port = parseInt(port.value, 10);
@@ -3363,7 +3370,11 @@
               if (port) port.value = '';
               loadServices().then(() => renderPickerMenu());
             }
-          } catch (e) { if (note) note.textContent = 'add failed: ' + e; }
+          } catch (e) {
+            if (note) note.textContent = 'add failed: ' + e;
+          } finally {
+            if (btn) btn.disabled = false;
+          }
         });
         on('set-scan', async () => {
           const box = document.getElementById('set-heads');
