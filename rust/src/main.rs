@@ -156,8 +156,6 @@ fn cmd_passwd(cfg: &observer_frog::config::Config, args: &[String]) -> i32 {
 
     match observer_frog::auth::set_password(&cfg.db_path, &first) {
         Ok(()) => {
-            // Setting the password consumes the first-run token, so the setup route closes too.
-            let _ = observer_frog::auth::clear_setup_token(&cfg.db_path);
             println!("password set. every device that was signed in must sign in again.");
             0
         }

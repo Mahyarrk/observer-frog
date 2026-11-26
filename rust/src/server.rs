@@ -574,12 +574,8 @@ pub const PUBLIC_ROUTES: &[&str] = &[
     "/api/auth/status",
     "/api/auth/login",
     "/api/auth/logout",
-    "/api/auth/setup",
     "/api/pair",
 ];
-
-/// Routes that are public only on the first-run window, and refuse once a password exists.
-pub const SETUP_ONLY_ROUTES: &[&str] = &["/api/auth/setup"];
 
 pub fn is_public(normalized: &str) -> bool {
     PUBLIC_ROUTES.contains(&normalized)
@@ -614,7 +610,6 @@ pub const DASHBOARD_ROUTES: &[&str] = &[
     "/api/auth/status",
     "/api/auth/login",
     "/api/auth/logout",
-    "/api/auth/setup",
     "/api/auth/password",
     "/api/auth/logout-all",
     "/api/auth/tls",
@@ -879,6 +874,20 @@ fn route(
                 "needs_login": true,
             })), false);
         }
+        // Signed in with the default password is not the same as being set up. Everything except
+        // changing the password and signing out stays shut, so the default cannot be used as a
+        // way to read the dashboard.
+        let allowed_while_default = matches!(
+            normalized.as_str(),
+            "/api/auth/password" | "/api/auth/logout" | "/api/auth/status"
+        );
+        if crate::auth::password_must_change(&app.cfg.db_path) && !allowed_while_default {
+            return (403, json_ct, json_bytes(&json!({
+                "ok": false,
+                "error": "the default password has to be changed before anything else",
+                "must_change": true,
+            })), false);
+        }
     }
 
     match (req.method.as_str(), req.path.as_str()) {
@@ -908,12 +917,17 @@ fn route(
             // free oracle for anyone on the LAN.
             let has = crate::auth::password_is_set(&app.cfg.db_path);
             let authed = session_valid(app, &req.headers, conn);
+            let must_change = crate::auth::password_must_change(&app.cfg.db_path);
             (200, json_ct, json_bytes(&json!({
                 "ok": true,
-                "required": has,
+                // Always required: a fresh install has the default password, so there is never a
+                // window where the dashboard is reachable without signing in.
+                "required": true,
                 "authenticated": authed,
                 "has_password": has,
-                "needs_setup": !has,
+                // Signed in with the default: the app stays shut until it is replaced.
+                "must_change": must_change && authed,
+                "default_password": crate::auth::DEFAULT_PASSWORD,
             })), true)
         }
         ("POST", p) if p == "/api/auth/login" || p == "/status/api/auth/login" => {
@@ -951,35 +965,6 @@ fn route(
                 // Deliberately the same message whether the password is wrong or absent: whether a
                 // password exists is already answered by /api/auth/status, and nothing else should be.
                 (401, json_ct, json_bytes(&json!({"ok": false, "error": "wrong password"})), false)
-            }
-        }
-        ("POST", p) if p == "/api/auth/setup" || p == "/status/api/auth/setup" => {
-            // First run only. Refuses once a password exists, so it is never a second door.
-            if req.body.len() > MAX_BODY {
-                return (413, json_ct, json_bytes(&json!({"ok": false, "error": "body too large"})), false);
-            }
-            if crate::auth::password_is_set(&app.cfg.db_path) {
-                return (409, json_ct, json_bytes(&json!({
-                    "ok": false,
-                    "error": "a password is already set; sign in and change it there",
-                })), false);
-            }
-            let body: Value = serde_json::from_slice(&req.body).unwrap_or(json!({}));
-            let token = body.get("token").and_then(|v| v.as_str()).unwrap_or("");
-            let password = body.get("password").and_then(|v| v.as_str()).unwrap_or("");
-            if !crate::auth::setup_token_matches(&app.cfg.db_path, token) {
-                return (401, json_ct, json_bytes(&json!({
-                    "ok": false,
-                    "error": "that setup token is not right; it is in the setup-token file in the data directory",
-                })), false);
-            }
-            match crate::auth::set_password(&app.cfg.db_path, password) {
-                Ok(()) => {
-                    // Consumed: the token is cleared in the same operation that sets the password.
-                    let _ = crate::auth::clear_setup_token(&app.cfg.db_path);
-                    (200, json_ct, json_bytes(&json!({"ok": true})), false)
-                }
-                Err(e) => (400, json_ct, json_bytes(&json!({"ok": false, "error": e})), false),
             }
         }
         ("POST", p) if p == "/api/auth/password" || p == "/status/api/auth/password" => {
@@ -1675,12 +1660,12 @@ mod tests {
             .filter(|r| DASHBOARD_ROUTES.contains(r))
             .collect();
         assert_eq!(shared, vec!["/api/report", "/api/health"]);
-        assert_eq!(DASHBOARD_ROUTES.len(), 27, "a route was added; classify it deliberately");
+        assert_eq!(DASHBOARD_ROUTES.len(), 26, "a route was added; classify it deliberately");
 
         // Auth routes are on the dashboard and split into public and session-required. Setup is
         // public but refuses once a password exists; status and login are public; the rest need a
         // session, which the gate enforces because they are absent from PUBLIC_ROUTES.
-        for r in ["/api/auth/status", "/api/auth/login", "/api/auth/logout", "/api/auth/setup"] {
+        for r in ["/api/auth/status", "/api/auth/login", "/api/auth/logout"] {
             assert!(is_public(r), "{r} must be reachable without a session");
         }
         for r in ["/api/auth/password", "/api/auth/logout-all"] {

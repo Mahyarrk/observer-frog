@@ -95,6 +95,8 @@ pub fn set_password(db_path: &Path, password: &str) -> Result<(), String> {
     }
     let hash = bcrypt::hash(password, BCRYPT_COST).map_err(|e| format!("cannot hash: {e}"))?;
     put(db_path, KEY_HASH, &hash)?;
+    // The default is gone, so the forced-change state is over.
+    clear_must_change(db_path);
     // New password, new signing key: nothing issued before this moment is still valid.
     let _ = delete(db_path, KEY_SECRET);
     Ok(())
@@ -120,73 +122,44 @@ pub fn remove_password(db_path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-// ---------------------------------------------------------------- setup token
 
-const KEY_SETUP: &str = "setup_token_sha256";
+// ---------------------------------------------------------------- first run
 
-/// Where the plaintext token is left for the operator. Beside the database, mode 0600.
-pub fn setup_token_path(db_path: &Path) -> std::path::PathBuf {
-    db_path.parent().unwrap_or(Path::new(".")).join("setup-token")
-}
-
-/// Create a first-run token, once, when no password exists.
+/// The password a fresh install starts with.
 ///
-/// Returns the path so the caller can print it. The plaintext goes to a 0600 file rather than the
-/// journal: journald is often volatile, rotates, and on Debian is readable by anyone in the
-/// `systemd-journal` or `adm` group, while this file is readable by the daemon user alone.
-pub fn ensure_setup_token(db_path: &Path) -> Option<std::path::PathBuf> {
+/// It is not a secret and is not treated as one: it exists so the first visit needs no ceremony,
+/// and `password_must_change` keeps the dashboard shut until it has been replaced. A default that
+/// merely unlocked the door would be worse than no password at all, because nobody would check.
+pub const DEFAULT_PASSWORD: &str = "123456";
+
+const KEY_MUST_CHANGE: &str = "password_must_change";
+
+/// Give a fresh database the default password. Returns true if it did.
+pub fn ensure_default_password(db_path: &Path) -> bool {
     if password_is_set(db_path) {
-        return None;
-    }
-    let path = setup_token_path(db_path);
-    if path.exists() {
-        return Some(path);
-    }
-    let bytes = random_bytes(16)?;
-    let token = hex(&bytes);
-    put(db_path, KEY_SETUP, &crate::ingest::token_digest(&token)).ok()?;
-
-    // 0600 from creation, not chmod afterwards: a window with wider permissions is a window.
-    #[cfg(unix)]
-    {
-        use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
-        let mut f = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&path)
-            .ok()?;
-        f.write_all(token.as_bytes()).ok()?;
-        f.write_all(b"\n").ok()?;
-    }
-    #[cfg(not(unix))]
-    {
-        std::fs::write(&path, format!("{token}\n")).ok()?;
-    }
-    Some(path)
-}
-
-/// Whether a presented token is the one on disk. Compared as digests, in constant time.
-pub fn setup_token_matches(db_path: &Path, presented: &str) -> bool {
-    let Some(stored) = get(db_path, KEY_SETUP) else {
-        return false;
-    };
-    if presented.trim().is_empty() {
         return false;
     }
-    let want = crate::ingest::token_digest(presented.trim());
-    stored.len() == want.len()
-        && crate::ingest::constant_time_eq(stored.as_bytes(), want.as_bytes())
+    match bcrypt::hash(DEFAULT_PASSWORD, BCRYPT_COST) {
+        Ok(hash) => {
+            if put(db_path, KEY_HASH, &hash).is_err() {
+                return false;
+            }
+            // Set explicitly rather than inferred from "the password equals 123456", so an operator
+            // who genuinely wants that password can keep it after changing it once.
+            let _ = put(db_path, KEY_MUST_CHANGE, "1");
+            true
+        }
+        Err(_) => false,
+    }
 }
 
-/// Consume the token: the row and the file both go, so it cannot be replayed.
-pub fn clear_setup_token(db_path: &Path) -> Result<(), String> {
-    let _ = delete(db_path, KEY_SETUP);
-    let path = setup_token_path(db_path);
-    let _ = std::fs::remove_file(path);
-    Ok(())
+/// Whether the operator still has to replace the default password before the dashboard opens.
+pub fn password_must_change(db_path: &Path) -> bool {
+    get(db_path, KEY_MUST_CHANGE).is_some()
+}
+
+fn clear_must_change(db_path: &Path) {
+    let _ = delete(db_path, KEY_MUST_CHANGE);
 }
 
 // ---------------------------------------------------------------- session secret

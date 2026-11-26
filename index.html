@@ -2073,16 +2073,13 @@
       </div>
       <p class="auth-hint" id="auth-hint">Checking…</p>
 
-      <!-- First run: no password exists yet, so the setup token from the data directory is asked for. -->
-      <form id="auth-setup-form" hidden>
-        <label class="auth-label" for="auth-token">Setup token</label>
-        <input class="auth-input" id="auth-token" type="text" autocomplete="off" autocapitalize="off"
-               spellcheck="false" placeholder="from the setup-token file" />
+      <!-- Signed in with the default password: the dashboard stays shut until this is replaced. -->
+      <form id="auth-change-form" hidden>
         <label class="auth-label" for="auth-new">Choose a password</label>
         <input class="auth-input" id="auth-new" type="password" autocomplete="new-password" />
         <label class="auth-label" for="auth-new2">Repeat it</label>
         <input class="auth-input" id="auth-new2" type="password" autocomplete="new-password" />
-        <button class="auth-btn" type="submit" id="auth-setup-btn">Claim this machine</button>
+        <button class="auth-btn" type="submit" id="auth-change-btn">Set it and continue</button>
       </form>
 
       <form id="auth-login-form" hidden>
@@ -2419,7 +2416,7 @@
       const API_BASE = (window.location.pathname.replace(/\/$/, '') || '');
       // Bump on every shell change. Declared before first use: a `const` referenced above its
       // declaration throws a TDZ error and takes the whole script down (it did).
-      const BUILD = 'of-35';
+      const BUILD = 'of-36';
       // Show the address actually in use, not a baked-in host.
       (function () {
         const el = document.getElementById('brand-url');
@@ -2585,14 +2582,14 @@
       function showGate(mode, hint, note) {
         const gate = document.getElementById('auth-gate');
         const shell = document.getElementById('app-shell');
-        const setup = document.getElementById('auth-setup-form');
+        const change = document.getElementById('auth-change-form');
         const login = document.getElementById('auth-login-form');
         const hintEl = document.getElementById('auth-hint');
         const noteEl = document.getElementById('auth-note');
         if (!gate || !shell) return;
         gate.hidden = false;
         shell.hidden = true;
-        if (setup) setup.hidden = mode !== 'setup';
+        if (change) change.hidden = mode !== 'change';
         if (login) login.hidden = mode !== 'login';
         if (hintEl && hint) hintEl.textContent = hint;
         if (noteEl) noteEl.textContent = note || '';
@@ -2616,8 +2613,10 @@
           showGate('login', 'Cannot reach this machine right now.', 'Reconnect to the network and try again.');
           return;
         }
-        if (d && d.needs_setup) {
-          showGate('setup', 'No password is set yet. Type the token from the setup-token file in this machine\'s data directory, then choose a password.');
+        if (d && d.must_change) {
+          // Signed in, but still on the default. The server refuses everything except setting a
+          // password, so this screen is the only thing that can happen next.
+          showGate('change', 'You are signed in with the default password. Choose your own to continue.');
           return;
         }
         if (d && d.authenticated) {
@@ -2665,25 +2664,28 @@
         }
       });
 
-      submitOnce('auth-setup-form', 'auth-setup-btn', async () => {
-        const token = (document.getElementById('auth-token') || {}).value || '';
+      submitOnce('auth-change-form', 'auth-change-btn', async () => {
         const a = (document.getElementById('auth-new') || {}).value || '';
         const b = (document.getElementById('auth-new2') || {}).value || '';
         if (a !== b) return 'the two passwords do not match';
         try {
-          const r = await fetch('api/auth/setup', {
+          // The current password is the default, because that is what is signed in.
+          const r = await fetch('api/auth/password', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ token, password: a }),
+            body: JSON.stringify({ action: 'change', current: '123456', password: a }),
           });
           const d = await r.json().catch(() => ({}));
           if (r.ok && d.ok) {
-            // Setting the password also rotates the secret, so sign in properly next.
-            showGate('login', 'Password set. Sign in.', '');
+            ['auth-new', 'auth-new2'].forEach((id) => {
+              const el = document.getElementById(id);
+              if (el) el.value = '';
+            });
+            await boot();
             return '';
           }
           return d.error || 'that did not work';
         } catch (e) {
-          return 'setup failed: ' + e;
+          return 'could not set it: ' + e;
         }
       });
 

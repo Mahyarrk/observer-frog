@@ -95,13 +95,17 @@ pub fn run(cfg: Config, config_path: Option<PathBuf>, tls: Option<(PathBuf, Path
         println!("  tail reports on {scheme} {}:{rp}/api/report", cfg.bind);
     }
 
-    // First run: a token in a 0600 file, and its path in the log. The secret is never printed,
-    // because a journal is a wider surface than a file readable only by this service's user.
-    if let Some(path) = crate::auth::ensure_setup_token(&cfg.db_path) {
+    // First run: the default password, which has to be replaced before the dashboard opens. The
+    // door is never unlocked just because the machine is new.
+    if crate::auth::ensure_default_password(&cfg.db_path) {
         println!();
-        println!("  No password is set. Claim this machine at {scheme}://{}:{}/ with the token in:", cfg.bind, port);
-        println!("    {}", path.display());
-        println!("  That file is removed once the password is set.");
+        println!("  First run. Sign in at {scheme}://{}:{}/ with:", cfg.bind, port);
+        println!("    password: {}", crate::auth::DEFAULT_PASSWORD);
+        println!("  You will be asked to choose a new one before the dashboard opens.");
+        println!();
+    } else if crate::auth::password_must_change(&cfg.db_path) {
+        println!();
+        println!("  Still on the default password. Sign in and change it to open the dashboard.");
         println!();
     }
 
