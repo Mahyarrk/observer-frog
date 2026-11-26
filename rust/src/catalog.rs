@@ -19,6 +19,8 @@ pub struct Entry {
     /// and assuming http probed them with a plain-text request that could only ever fail.
     pub scheme: String,
     pub process_match: String,
+    /// An interface that proves this product is running, for the platforms where it has no process.
+    pub iface: String,
     pub notes: String,
     /// Installed but normally not running. Still reported, still alerts on transitions, but kept
     /// out of uptime arithmetic — a service that is off on purpose would otherwise read 0% for ever.
@@ -116,6 +118,7 @@ fn parse(source: &str, label: &str) -> Result<Vec<Entry>, ConfigError> {
             verify_contains,
             process_match: get("process_match"),
             notes: get("notes"),
+            iface: r.get("iface").and_then(|v| v.as_str()).unwrap_or("").to_string(),
             scheme: r
                 .get("scheme")
                 .and_then(|v| v.as_str())
@@ -175,6 +178,7 @@ pub fn instantiate(entry: &Entry, host: &str, port: Option<u16>, instance: &str)
             target: if entry.process_match.is_empty() { entry.id.clone() } else { entry.process_match.clone() },
             name: entry.name.clone(),
             group: entry.group.clone(),
+            iface: entry.iface.clone(),
             ..Default::default()
         }),
         other => Err(ConfigError(format!("{}: probe {other:?} cannot be instantiated from a catalog entry", entry.id))),
@@ -202,6 +206,9 @@ pub fn to_toml(service: &Service) -> String {
     }
     if !service.field.is_empty() {
         lines.push(format!("field = \"{}\"", service.field));
+    }
+    if !service.iface.is_empty() {
+        lines.push(format!("iface = \"{}\"", service.iface));
     }
     lines.join("\n")
 }

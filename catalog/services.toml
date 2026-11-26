@@ -208,7 +208,8 @@ name = "WireGuard"
 group = "Network"
 probe = "process"
 process_match = "wireguard-go"
-notes = "Userspace WireGuard. A process probe: the tunnel has no listening socket to sign."
+iface = "wg0"
+notes = "Userspace on macOS (a process), a kernel module on Linux (an interface). Found by either."
 
 [[catalog]]
 id = "tailscale"

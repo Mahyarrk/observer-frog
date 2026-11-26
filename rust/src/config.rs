@@ -38,6 +38,12 @@ pub struct Service {
     pub max_age_s: i64,
     pub timeout: f64,
     pub ports: String,
+    /// A network interface that proves this service is up.
+    ///
+    /// WireGuard is the case this exists for: on Linux it is a kernel module with no process at
+    /// all, only an interface, while on macOS it is a userspace process. A process probe alone
+    /// therefore found it on one platform and never on the other.
+    pub iface: String,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -258,6 +264,7 @@ fn as_service(raw: &toml::Table, where_: &str) -> Result<Service, ConfigError> {
             let explicit = str_of(raw.get("ports"));
             if explicit.is_empty() { derived_port } else { explicit }
         },
+        iface: str_of(raw.get("iface")),
     })
 }
 

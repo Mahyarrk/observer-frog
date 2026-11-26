@@ -397,11 +397,53 @@ pub fn probe_file_json(path: &str, field: &str, contains: &str) -> Triple {
 // ---------------------------------------------------------------- dispatch
 
 /// Run one configured Service and return its triple.
+/// Is a network interface present and up?
+///
+/// WireGuard on Linux is a kernel module: there is no process to find, only `wg0`. Asking the
+/// interface table is the only honest way to see it there, while on macOS the userspace process is
+/// the thing that exists. A service may name an interface and be found by either.
+pub fn probe_iface(name: &str) -> Triple {
+    let t0 = Instant::now();
+    let ms = || t0.elapsed().as_millis() as i64;
+    let iface = name.trim();
+    if iface.is_empty() {
+        return result(STATE_UNAVAILABLE, "no interface named", 0);
+    }
+    #[cfg(unix)]
+    {
+        let cname = match std::ffi::CString::new(iface) {
+            Ok(c) => c,
+            Err(_) => return result(STATE_UNAVAILABLE, "invalid interface name", ms()),
+        };
+        // if_nametoindex returns 0 when the interface does not exist. It needs no privileges,
+        // which matters: this runs as the same unprivileged user as everything else.
+        let idx = unsafe { libc::if_nametoindex(cname.as_ptr()) };
+        if idx != 0 {
+            return result(STATE_UP, &format!("interface {iface} is up"), ms());
+        }
+        return result(STATE_DOWN, &format!("no interface {iface}"), ms());
+    }
+    #[cfg(not(unix))]
+    {
+        result(STATE_UNAVAILABLE, "interface checks are not implemented here", 0)
+    }
+}
+
 pub fn run(service: &crate::config::Service) -> Triple {
     let out = match service.probe.as_str() {
         "http" => probe_http(&service.target, service.expect_status, &service.contains, service.timeout),
         "tcp" => probe_tcp(&service.target, service.timeout),
-        "process" => probe_process(&service.target),
+        "iface" => probe_iface(&service.target),
+        "process" => {
+            // A process probe that also names an interface is satisfied by either: the software
+            // ships both ways, and which one is running depends on the platform.
+            let by_process = probe_process(&service.target);
+            if by_process.0 == STATE_UP || service.iface.is_empty() {
+                by_process
+            } else {
+                probe_iface(&service.iface)
+            }
+        }
         "file_age" => probe_file_age(&service.target, service.max_age_s),
         "file_json" => probe_file_json(&service.target, &service.field, &service.contains),
         other => result(STATE_UNAVAILABLE, &format!("unknown probe {other:?}"), 0),
