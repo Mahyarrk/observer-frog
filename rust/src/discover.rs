@@ -234,7 +234,9 @@ pub fn candidates(entries: &[Entry], host: &str, monitored: &[String]) -> Vec<Ca
             // below only know how to look at ports.
             if !entry.process_match.is_empty() {
                 if let Ok(svc) = crate::catalog::instantiate(entry, host, None, "") {
-                    let (probe_state, _, _) = crate::probes::probe_process(&svc.target);
+                    // `run`, not `probe_process`, for the same reason: the process/interface pair
+                    // lives in the dispatcher.
+                    let (probe_state, _, _) = crate::probes::run(&svc);
                     if probe_state == crate::probes::STATE_UP {
                         state = CAND_AVAILABLE;
                         detail = format!("running ({})", entry.process_match);
@@ -342,7 +344,9 @@ pub fn discover(entries: &[Entry], host: &str) -> Vec<Service> {
             continue;
         }
         if let Ok(svc) = crate::catalog::instantiate(entry, host, None, "") {
-            let (state, _, _) = crate::probes::probe_process(&svc.target);
+            // Through `run`, not `probe_process`: the dispatcher knows a process service may also
+            // name an interface, which is how WireGuard is found on Linux at all.
+            let (state, _, _) = crate::probes::run(&svc);
             if state == crate::probes::STATE_UP {
                 found.push(svc);
             }
