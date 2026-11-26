@@ -2099,7 +2099,7 @@
       const API_BASE = (window.location.pathname.replace(/\/$/, '') || '');
       // Bump on every shell change. Declared before first use: a `const` referenced above its
       // declaration throws a TDZ error and takes the whole script down (it did).
-      const BUILD = 'of-22';
+      const BUILD = 'of-23';
       // Show the address actually in use, not a baked-in host.
       (function () {
         const el = document.getElementById('brand-url');
@@ -2848,6 +2848,14 @@
           } else {
             historyTick = 0;
           }
+          // Settings is live too. As a PWA there is no reload button, so a pairing request that
+          // only appeared after a manual refresh never appeared at all. Cheap: these are the same
+          // reads the tab already makes, and only while it is the visible tab.
+          if (activeTab === 'settings' && !isFetching) {
+            loadSettings();
+            loadPairing();
+            if (typeof loadNodes === 'function') loadNodes();
+          }
           const isOfflineMode = elConnectionAlert.classList.contains('visible');
           if (isOfflineMode && countdownSec > 5) {
             countdownSec = 5;
@@ -2931,13 +2939,21 @@
         }
         set('set-path', d.config_path);
         set('set-db', d.db_path);
+        // This runs on a timer now, so it must not fight the operator: never overwrite a field
+        // that has focus, and never rewrite a value that is already correct (that moves the caret).
         const serve = document.getElementById('set-serve');
-        if (serve) serve.checked = !!d.serve;
+        if (serve && document.activeElement !== serve && serve.checked !== !!d.serve) {
+          serve.checked = !!d.serve;
+        }
         const rt = document.getElementById('set-report-to');
-        if (rt) rt.value = d.report_to || '';
+        if (rt && document.activeElement !== rt && rt.value !== (d.report_to || '')) {
+          rt.value = d.report_to || '';
+        }
         syncRoleFields();
         const iv = document.getElementById('set-interval');
-        if (iv) iv.value = d.poll_interval;
+        if (iv && document.activeElement !== iv && iv.value !== String(d.poll_interval)) {
+          iv.value = d.poll_interval;
+        }
         const auto = document.getElementById('set-autostart');
         if (auto) {
           auto.checked = !!d.autostart;
@@ -2952,13 +2968,19 @@
         }
       }
 
-      async function loadServices() {
+      let servicesStamp = '';
+      async function loadServices(force) {
         const box = document.getElementById('set-services');
         if (!box) return;
         let d;
         try { d = await (await fetch('api/services', { cache: 'no-store' })).json(); } catch (_) { return; }
         if (!d || !d.ok) return;
         monitoredIds = d.ids || [];
+        // Called on a timer, so rebuild only when the set of services changed — otherwise the
+        // Remove buttons are replaced under the operator's finger.
+        const stamp = JSON.stringify((d.services || []).map((s) => [s.id, s.port]));
+        if (!force && stamp === servicesStamp) return;
+        servicesStamp = stamp;
         box.textContent = '';
         if (!d.count) {
           const empty = document.createElement('span');
@@ -2992,7 +3014,7 @@
               });
               const res = await r.json();
               if (note) note.textContent = res.ok ? ('removed ' + s.id) : (res.error || 'remove failed');
-              loadServices();
+              loadServices(true);
             } catch (e) { if (note) note.textContent = 'remove failed: ' + e; }
           });
           row.appendChild(meta); row.appendChild(rm);
@@ -3082,7 +3104,7 @@
           const d = await r.json();
           if (note) note.textContent = d.ok ? ('added ' + cid) : (d.error || 'add failed');
           if (d.ok) {
-            loadServices();
+            loadServices(true);
             loadCandidates();
           }
         } catch (e) { if (note) note.textContent = 'add failed: ' + e; }
@@ -3195,9 +3217,11 @@
       // ---- pairing -----------------------------------------------------
       // A tail asks; this list is the asking. Nothing is a credential until the tick is pressed,
       // which is the whole reason the request is shown rather than auto-accepted.
-      async function loadPairing() {
+      let pairStamp = '';
+      async function loadPairing(force) {
         const list = document.getElementById('pair-list');
         if (!list) return;
+        if (force) { pairStamp = ''; pairedStamp = ''; }
         let d;
         try {
           d = await (await fetch('api/pair', { cache: 'no-store' })).json();
@@ -3208,6 +3232,11 @@
         const card = document.getElementById('pair-card');
         if (card) card.hidden = !!(d && d.note);
         renderPaired((d && d.paired) || []);
+        // This is called on a timer. Rebuilding the list unconditionally would replace the buttons
+        // under the operator's finger, so a tap could land on a detached node and do nothing.
+        const stamp = JSON.stringify(rows.map((r) => [r.id, r.node_id]));
+        if (stamp === pairStamp) return;
+        pairStamp = stamp;
         if (!rows.length) {
           list.innerHTML = '<p class="pair-empty">' +
             (d && d.note ? escapeHtml(d.note) : 'No machines are asking to pair.') + '</p>';
@@ -3230,9 +3259,14 @@
       }
 
       // Machines already trusted, with the one action that applies to them.
+      let pairedStamp = '';
       function renderPaired(rows) {
         const list = document.getElementById('paired-list');
         if (!list) return;
+        // Same reason as the pending list: rebuilt on a timer, so only when something moved.
+        const stamp = JSON.stringify(rows.map((r) => [r.node_id, r.name, Math.floor((r.last_seen_ts || 0) / 60)]));
+        if (stamp === pairedStamp) return;
+        pairedStamp = stamp;
         if (!rows.length) {
           list.innerHTML = '<p class="pair-empty">No machines are paired yet.</p>';
           return;
@@ -3269,7 +3303,7 @@
         } catch (e) {
           if (note) note.textContent = 'failed: ' + e;
         }
-        await loadPairing();
+        await loadPairing(true);
         if (typeof loadNodes === 'function') await loadNodes();
       }
 
@@ -3286,7 +3320,7 @@
         } catch (e) {
           if (note) note.textContent = 'failed: ' + e;
         }
-        await loadPairing();
+        await loadPairing(true);
         if (typeof loadNodes === 'function') await loadNodes();
       }
 
@@ -3387,7 +3421,7 @@
             if (note) note.textContent = d.ok ? ('added ' + cid) : (d.error || 'add failed');
             if (d.ok) {
               if (port) port.value = '';
-              loadServices().then(() => renderPickerMenu());
+              loadServices(true).then(() => renderPickerMenu());
             }
           } catch (e) {
             if (note) note.textContent = 'add failed: ' + e;
