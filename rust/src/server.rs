@@ -919,8 +919,14 @@ fn route(req: &Request, app: &Arc<App>) -> (u16, String, Vec<u8>, bool) {
         }
         ("GET" | "HEAD", _) if normalized == "/api/heads" => {
             // Pairing lives here rather than in a CLI flow: the settings page lists what answered.
+            let me = crate::config::load(Some(&crate::settings::target(&app.cfg)))
+                .map(|c| c.node_name)
+                .unwrap_or_else(|_| app.cfg.node_name.clone());
+            // An instance never offers itself as a head to pair with.
+            // shortcut: matched by node name, so two machines sharing a name would hide each other;
+            // upgrade to a per-install uuid in the advertisement if that ever happens.
             let found = crate::lan::find_heads(std::time::Duration::from_millis(1500));
-            let heads: Vec<Value> = found.iter().map(|h| h.to_json()).collect();
+            let heads: Vec<Value> = found.iter().filter(|h| h.name != me).map(|h| h.to_json()).collect();
             (200, json_ct, json_bytes(&json!({
                 "ok": true, "found": heads.len(), "heads": heads,
             })), false)

@@ -92,16 +92,12 @@ pub fn run(cfg: Config, config_path: Option<PathBuf>, tls: Option<(PathBuf, Path
         println!("  tail reports on {scheme} {}:{rp}/api/report", cfg.bind);
     }
 
-    // Only a node acting as head answers discovery. Advertising from every node meant a tail
-    // announced itself as a head, so a scan found only the machine asking.
-    //
-    // The advertised URL must also be reachable: `cfg.bind` is `0.0.0.0`, which is not an address
-    // anyone can connect to, and every node advertising `http://0.0.0.0:8770/` made them collapse
-    // into a single entry when the results were deduplicated by URL.
+    // Every node answers discovery with its dashboard port, whether or not it is collecting; only
+    // the report port is conditional on serving. A scan therefore finds every machine, and the
+    // answer's `report_port` is what says whether that machine will take reports.
     {
         let name = cfg.node_name.clone();
-        let advertised_host = crate::lan::reachable_host(&cfg.bind);
-        let url = format!("{scheme}://{advertised_host}:{port}/");
+        let url = format!("{scheme}://{}:{}/", cfg.bind, port);
         let report_port = report_bound;
         let halt = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let watcher_for_lan = Arc::clone(&watcher_holder);
