@@ -834,6 +834,25 @@ fn route(req: &Request, app: &Arc<App>) -> (u16, String, Vec<u8>, bool) {
                         Some(entry) => match crate::catalog::instantiate(entry, "127.0.0.1", port, instance) {
                             Err(e) => Err(e.to_string()),
                             Ok(svc) => {
+                                // The button says "Verify and add", so verify: probe the candidate
+                                // now and refuse it if it does not answer as itself. Without this
+                                // the block was written for a port nobody was listening on, and the
+                                // dashboard showed a service that had never existed.
+                                let (state, detail, _) = crate::probes::run(&svc);
+                                if state != crate::probes::STATE_UP {
+                                    return (
+                                        400,
+                                        json_ct,
+                                        json_bytes(&json!({
+                                            "ok": false,
+                                            "error": format!(
+                                                "nothing answered at {}: {detail}",
+                                                svc.target
+                                            ),
+                                        })),
+                                        false,
+                                    );
+                                }
                                 let block = crate::catalog::to_toml(&svc);
                                 crate::settings::add_service(&path, &block, &svc.id)
                             }
