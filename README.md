@@ -62,6 +62,8 @@ Setup, pairing, probe types, the config format, endpoints, and what it deliberat
 
 The rules behind the behaviour, and why each exists: [docs/DESIGN.md](docs/DESIGN.md).
 
+Where it is going, and what it deliberately will not do: [docs/ROADMAP.md](docs/ROADMAP.md).
+
 ## How this was built, and by whom
 
 The code was written by AI agents running Hermes Agent, under my direction. I did not type it, and I
