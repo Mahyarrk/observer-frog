@@ -35,7 +35,22 @@ fn digest_eq(a: &str, b: &str) -> bool {
     for i in 0..a.len() {
         diff |= a[i] ^ b[i];
     }
-    diff == 0
+    std::hint::black_box(diff) == 0
+}
+
+/// The same comparison over raw bytes, for the session cookie's MAC.
+///
+/// `constant_time_eq` and not `==`: a byte-wise early exit leaks how much of a forged MAC was
+/// correct, which is enough to forge one a byte at a time.
+pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for i in 0..a.len() {
+        diff |= a[i] ^ b[i];
+    }
+    std::hint::black_box(diff) == 0
 }
 
 /// The node a token belongs to, if any. Tokens come from the environment, never the config file.

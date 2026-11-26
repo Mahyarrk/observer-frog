@@ -58,6 +58,9 @@ pub fn run(cfg: Config, config_path: Option<PathBuf>, tls: Option<(PathBuf, Path
     ));
     let poller_holder: Arc<Mutex<Option<Arc<poller::Poller>>>> = Arc::new(Mutex::new(None));
     let app = build(&cfg, Arc::clone(&poller_holder));
+    // The cookie's Secure flag follows the transport, so the app has to know which one it got.
+    app.tls_enabled
+        .store(tls.is_some(), std::sync::atomic::Ordering::Relaxed);
 
     let port = match server::listen(Arc::clone(&app), &cfg.bind, cfg.port, tls.clone(), server::ListenerRole::Dashboard) {
         Ok(p) => p,
@@ -90,6 +93,16 @@ pub fn run(cfg: Config, config_path: Option<PathBuf>, tls: Option<(PathBuf, Path
     if let Some(rp) = report_bound {
         let scheme = if tls.is_some() { "plain HTTP for tails" } else { "plain HTTP" };
         println!("  tail reports on {scheme} {}:{rp}/api/report", cfg.bind);
+    }
+
+    // First run: a token in a 0600 file, and its path in the log. The secret is never printed,
+    // because a journal is a wider surface than a file readable only by this service's user.
+    if let Some(path) = crate::auth::ensure_setup_token(&cfg.db_path) {
+        println!();
+        println!("  No password is set. Claim this machine at {scheme}://{}:{}/ with the token in:", cfg.bind, port);
+        println!("    {}", path.display());
+        println!("  That file is removed once the password is set.");
+        println!();
     }
 
     // Every node answers discovery with its dashboard port, whether or not it is collecting; only

@@ -130,6 +130,18 @@ pub fn apply(path: &Path, changes: &serde_json::Value) -> Result<Vec<String>, St
         changed.push(name.to_string());
     }
 
+    // TLS paths live at the top level, beside report_to. Written with the same quoting rule as
+    // every other string, because a bare empty value is invalid TOML and takes the node down.
+    for key in ["tls_cert", "tls_key"] {
+        if let Some(v) = changes.get(key).and_then(|x| x.as_str()) {
+            let before = text.clone();
+            text = set_top_level(&text, key, &format!("{v:?}"));
+            if before != text {
+                note(&mut changed, key);
+            }
+        }
+    }
+
     if let Some(v) = changes.get("node_id").and_then(|x| x.as_str()) {
         let before = text.clone();
         text = set_in_section(&text, "node", "id", &format!("{v:?}")).0;

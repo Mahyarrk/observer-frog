@@ -58,6 +58,7 @@ fn run(args: &[String]) -> i32 {
         Some("uninstall") => observer_frog::install::uninstall(&cfg),
         Some("serve") | None => cmd_serve(&cfg, args, config_path),
         Some("status") => cmd_status(&cfg),
+        Some("passwd") => cmd_passwd(&cfg, args),
         Some(other) => {
             eprintln!("unknown command {other:?}");
             usage();
@@ -70,6 +71,103 @@ fn positional_after(args: &[String], word: &str) -> usize {
     args.iter().position(|a| a == word).map(|i| i + 1).unwrap_or(args.len())
 }
 
+
+/// Read a line from the terminal with echo off, so a password never lands in the scrollback or a
+/// shell history.
+fn read_password_tty(prompt: &str) -> Option<String> {
+    use std::io::{BufRead, Write};
+
+    #[cfg(unix)]
+    {
+        // SAFETY: tcgetattr/tcsetattr on a standard terminal. The attributes are restored before
+        // returning, including on the error paths below, so a failed read does not leave the
+        // terminal with echo off.
+        unsafe {
+            let fd = libc::STDIN_FILENO;
+            let mut term: libc::termios = std::mem::zeroed();
+            if libc::tcgetattr(fd, &mut term) != 0 {
+                return None;
+            }
+            let original = term;
+            term.c_lflag &= !(libc::ECHO);
+            libc::tcsetattr(fd, libc::TCSANOW, &term);
+
+            print!("{prompt}");
+            let _ = std::io::stdout().flush();
+            let mut line = String::new();
+            let read = std::io::stdin().lock().read_line(&mut line);
+            libc::tcsetattr(fd, libc::TCSANOW, &original);
+            println!();
+
+            match read {
+                Ok(_) => Some(line.trim_end_matches(['\r', '\n']).to_string()),
+                Err(_) => None,
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        print!("{prompt}");
+        let _ = std::io::stdout().flush();
+        let mut line = String::new();
+        std::io::stdin().lock().read_line(&mut line).ok()?;
+        Some(line.trim_end_matches(['\r', '\n']).to_string())
+    }
+}
+
+/// `observer-frog passwd`: set or reset the operator password from this machine's console.
+///
+/// This exists instead of an HTTP reset route because a loopback rule cannot be made honest: behind
+/// nginx or Caddy every request looks loopback, so the restriction would evaporate the day someone
+/// adds a proxy. Anyone able to run this already has shell access, which is the same trust boundary
+/// as reading the token file beside the database.
+fn cmd_passwd(cfg: &observer_frog::config::Config, args: &[String]) -> i32 {
+    let reset = args.iter().any(|a| a == "--reset");
+
+    if !reset && observer_frog::auth::password_is_set(&cfg.db_path) {
+        let current = match read_password_tty("current password: ") {
+            Some(v) => v,
+            None => {
+                eprintln!("cannot read from the terminal");
+                return 2;
+            }
+        };
+        if !observer_frog::auth::verify_password(&cfg.db_path, &current) {
+            eprintln!("that is not the current password (pass --reset if you have lost it)");
+            return 1;
+        }
+    }
+
+    let first = match read_password_tty("new password: ") {
+        Some(v) => v,
+        None => {
+            eprintln!("cannot read from the terminal");
+            return 2;
+        }
+    };
+    let again = match read_password_tty("repeat it: ") {
+        Some(v) => v,
+        None => return 2,
+    };
+    if first != again {
+        eprintln!("the two do not match");
+        return 1;
+    }
+
+    match observer_frog::auth::set_password(&cfg.db_path, &first) {
+        Ok(()) => {
+            // Setting the password consumes the first-run token, so the setup route closes too.
+            let _ = observer_frog::auth::clear_setup_token(&cfg.db_path);
+            println!("password set. every device that was signed in must sign in again.");
+            0
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            1
+        }
+    }
+}
+
 fn usage() {
     println!(
         "observer-frog {VERSION} — status dashboard for your machines
@@ -78,6 +176,8 @@ usage: observer-frog [--config PATH] <command>
 
 commands:
   status     show resolved configuration and database state
+  passwd     set the operator password (reads from the terminal, never an argument)
+             --reset skips the current password, for a forgotten one; console only
   config     print resolved settings
   catalog    list services that ship with a ready-made definition
   discover   find what this machine is running and print ready-to-use config blocks
@@ -374,10 +474,16 @@ fn cmd_serve(cfg: &config::Config, args: &[String], config_path: Option<PathBuf>
     if let Some(p) = flag(args, "--port").and_then(|v| v.parse::<u16>().ok()) {
         cfg.port = p;
     }
-    let cert = flag(args, "--tls-cert");
-    let key = flag(args, "--tls-key");
+    // Flags win over the config file, so a one-off run can override what is installed. The config
+    // is what makes an imported certificate survive a reboot: a service unit cannot pass flags.
+    let cert: Option<PathBuf> = flag(args, "--tls-cert")
+        .map(PathBuf::from)
+        .or_else(|| cfg.tls_cert.clone());
+    let key: Option<PathBuf> = flag(args, "--tls-key")
+        .map(PathBuf::from)
+        .or_else(|| cfg.tls_key.clone());
     if cert.is_some() != key.is_some() {
-        eprintln!("--tls-cert and --tls-key must be given together");
+        eprintln!("a TLS certificate and key must be given together");
         return 2;
     }
     let verbose = has(args, "-v") || has(args, "--verbose");
@@ -408,7 +514,7 @@ fn cmd_serve(cfg: &config::Config, args: &[String], config_path: Option<PathBuf>
     }
 
     let tls = match (cert, key) {
-        (Some(c), Some(k)) => Some((PathBuf::from(c), PathBuf::from(k))),
+        (Some(c), Some(k)) => Some((c, k)),
         _ => None,
     };
     observer_frog::runtime::run(cfg, config_path, tls)

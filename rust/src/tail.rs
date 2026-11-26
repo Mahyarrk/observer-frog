@@ -206,6 +206,8 @@ mod tests {
             discover: false,
             report_port: None,
             report_to: None,
+            tls_cert: None,
+            tls_key: None,
             token_env: String::new(),
             token_file: None,
             services,

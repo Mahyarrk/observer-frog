@@ -48,6 +48,14 @@ pub struct App {
     pub reports_ok: Arc<std::sync::atomic::AtomicU64>,
     pub reports_failed: Arc<std::sync::atomic::AtomicU64>,
     pub last_report_error: Arc<Mutex<Option<String>>>,
+    /// Serialises password checks. bcrypt at cost 12 is 376 ms on the head, so concurrent logins
+    /// would starve the poller on a two-core box.
+    pub login_lock: Mutex<()>,
+    pub login_limiter: LoginLimiter,
+    /// Whether the dashboard listener terminated TLS. Read to decide the cookie's `Secure` flag:
+    /// setting it unconditionally would lock out every plain-HTTP install. Interior mutability
+    /// because `listen()` learns the transport after `App` exists.
+    pub tls_enabled: std::sync::atomic::AtomicBool,
 }
 
 impl App {
@@ -68,6 +76,9 @@ impl App {
             reports_ok: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             reports_failed: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             last_report_error: Arc::new(Mutex::new(None)),
+            login_lock: Mutex::new(()),
+            login_limiter: LoginLimiter::new(),
+            tls_enabled: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -553,6 +564,30 @@ pub fn reports_port_allows(path: &str) -> bool {
     REPORTS_PORT_ROUTES.contains(&path)
 }
 
+/// Routes an anonymous visitor may reach on the dashboard port.
+///
+/// Three things justify an entry here: the shell has to load before anyone can log in, a tail has to
+/// be able to ask to join before it has an account, and logout has to clear a cookie even when the
+/// session is already dead. Everything else needs a session.
+pub const PUBLIC_ROUTES: &[&str] = &[
+    "/api/health",
+    "/api/auth/status",
+    "/api/auth/login",
+    "/api/auth/logout",
+    "/api/auth/setup",
+    "/api/pair",
+];
+
+/// Routes that are public only on the first-run window, and refuse once a password exists.
+pub const SETUP_ONLY_ROUTES: &[&str] = &["/api/auth/setup"];
+
+pub fn is_public(normalized: &str) -> bool {
+    PUBLIC_ROUTES.contains(&normalized)
+}
+
+/// The routes that accept a machine's bearer token rather than a person's session.
+pub const MACHINE_ROUTES: &[&str] = &["/api/report"];
+
 /// Every route the dashboard serves. Kept here so the admin surface is a list a reader can see,
 /// rather than something discovered by scrolling a thousand-line match.
 ///
@@ -576,6 +611,13 @@ pub const DASHBOARD_ROUTES: &[&str] = &[
     "/api/heads",
     "/api/pair",
     "/api/pair/ask",
+    "/api/auth/status",
+    "/api/auth/login",
+    "/api/auth/logout",
+    "/api/auth/setup",
+    "/api/auth/password",
+    "/api/auth/logout-all",
+    "/api/auth/tls",
     "/api/pair/decide",
     "/api/pair/remove",
     "/api/ignore",
@@ -650,11 +692,15 @@ fn handle<S: Read + Write>(mut stream: S, app: Arc<App>, conn: ConnMeta) {
         Request { method, path, query, headers, body, declared_len: length }
     };
 
-    let (code, ctype, payload, cors) = route(&req, &app, conn);
+    let mut cookie: Option<String> = None;
+    let (code, ctype, payload, cors) = route(&req, &app, conn, &mut cookie);
     let head_only = req.method == "HEAD";
     let mut out = Vec::new();
     out.extend_from_slice(format!("HTTP/1.1 {code} {}\r\n", reason(code)).as_bytes());
     out.extend_from_slice(format!("Content-Type: {ctype}\r\n").as_bytes());
+    if let Some(c) = cookie {
+        out.extend_from_slice(format!("Set-Cookie: {c}\r\n").as_bytes());
+    }
     out.extend_from_slice(format!("Content-Length: {}\r\n", payload.len()).as_bytes());
     out.extend_from_slice(b"Cache-Control: no-cache, no-store, must-revalidate\r\n");
     if cors {
@@ -696,6 +742,85 @@ fn urldecode(s: &str) -> String {
     String::from_utf8_lossy(&out).to_string()
 }
 
+/// Whether this request carries a valid session.
+///
+/// A node with no password has nothing to verify a session against, so it is not authenticated.
+/// The setup route exists for exactly that window and is gated on the token file instead.
+fn session_valid(app: &Arc<App>, headers: &std::collections::HashMap<String, String>, _conn: ConnMeta) -> bool {
+    let Some(token) = crate::auth::cookie_from(headers) else {
+        return false;
+    };
+    crate::auth::verify(&app.cfg.db_path, &token).is_some()
+}
+
+/// The key a rate limiter counts against. The socket address, never a header: `X-Forwarded-For` is
+/// a value the client writes, so trusting it would make the limit opt-out.
+fn peer_key(conn: ConnMeta) -> String {
+    conn.peer
+        .map(|p| p.ip().to_string())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+/// Five failures in fifteen minutes, per peer. In memory, so a restart clears it: persisting
+/// lockouts is a reliable way to lock yourself out during an outage.
+pub struct LoginLimiter {
+    inner: std::sync::Mutex<std::collections::HashMap<String, (u32, i64)>>,
+}
+
+pub const LOGIN_MAX_FAILURES: u32 = 5;
+pub const LOGIN_WINDOW_S: i64 = 900;
+
+impl LoginLimiter {
+    pub fn new() -> Self {
+        Self { inner: std::sync::Mutex::new(std::collections::HashMap::new()) }
+    }
+
+    fn now() -> i64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0)
+    }
+
+    /// Seconds to wait, when this peer has spent its attempts.
+    pub fn retry_after(&self, peer: &str) -> Option<i64> {
+        let map = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let (count, first) = map.get(peer)?;
+        if *count < LOGIN_MAX_FAILURES {
+            return None;
+        }
+        let elapsed = Self::now() - *first;
+        if elapsed >= LOGIN_WINDOW_S {
+            return None; // the window has passed; the next attempt may go ahead
+        }
+        Some(LOGIN_WINDOW_S - elapsed)
+    }
+
+    pub fn record_failure(&self, peer: &str) {
+        let mut map = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let now = Self::now();
+        match map.get_mut(peer) {
+            Some((count, first)) if now - *first < LOGIN_WINDOW_S => {
+                *count += 1;
+            }
+            // A new window, or the first failure from this peer.
+            _ => {
+                map.insert(peer.to_string(), (1, now));
+            }
+        }
+    }
+
+    pub fn clear(&self, peer: &str) {
+        self.inner.lock().unwrap_or_else(|e| e.into_inner()).remove(peer);
+    }
+}
+
+impl Default for LoginLimiter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 fn reason(code: u16) -> &'static str {
     match code {
         200 => "OK",
@@ -708,9 +833,24 @@ fn reason(code: u16) -> &'static str {
     }
 }
 
-fn route(req: &Request, app: &Arc<App>, conn: ConnMeta) -> (u16, String, Vec<u8>, bool) {
+/// The cookie a route wants written, if any. Passed in rather than returned so the four-tuple every
+/// existing arm produces stays untouched: only login and logout set it.
+fn route(
+    req: &Request,
+    app: &Arc<App>,
+    conn: ConnMeta,
+    cookie: &mut Option<String>,
+) -> (u16, String, Vec<u8>, bool) {
     let json_ct = "application/json; charset=utf-8".to_string();
-    let normalized = req.path.replace("/status", "");
+    // Strip the reverse-proxy prefix, not every occurrence of the word. `replace("/status", "")`
+    // turned `/api/status` into `/api/`, so a path check on the result was comparing something
+    // that no longer named the route — which is how the auth gate first let `/api/status` through.
+    let normalized = req
+        .path
+        .strip_prefix("/status")
+        .filter(|rest| rest.starts_with('/'))
+        .unwrap_or(&req.path)
+        .to_string();
 
     // A report-port connection may not reach the admin surface. Checked on both spellings of the
     // path, because every route also answers under `/status/...` for the reverse-proxy layout, and
@@ -720,6 +860,25 @@ fn route(req: &Request, app: &Arc<App>, conn: ConnMeta) -> (u16, String, Vec<u8>
     {
         // 404, not 403: this listener should not confirm which routes exist.
         return (404, json_ct, json_bytes(&json!({"error": "not found"})), false);
+    }
+
+    // The person-versus-machine gate. An operator route needs a session; a machine route needs a
+    // bearer token and is left to the report handler, which already checks it.
+    //
+    // Only API paths are gated. Static assets and the shell have to load before anyone can present
+    // a cookie, so blocking them would make the login page itself unreachable.
+    let is_api = normalized.starts_with("/api/");
+    if is_api
+        && !is_public(&normalized)
+        && !MACHINE_ROUTES.contains(&normalized.as_str())
+    {
+        if !session_valid(app, &req.headers, conn) {
+            return (401, json_ct, json_bytes(&json!({
+                "ok": false,
+                "error": "not signed in",
+                "needs_login": true,
+            })), false);
+        }
     }
 
     match (req.method.as_str(), req.path.as_str()) {
@@ -743,6 +902,161 @@ fn route(req: &Request, app: &Arc<App>, conn: ConnMeta) -> (u16, String, Vec<u8>
                 .unwrap_or(30);
             let node = req.query.get("node").cloned().unwrap_or_else(|| app.cfg.node_id.clone());
             (200, json_ct, json_bytes(&build_history_for(app, &node, days)), true)
+        }
+        (m, p) if (m == "GET" || m == "HEAD") && (p == "/api/auth/status" || p == "/status/api/auth/status") => {
+            // Booleans only. Naming the operator, or hinting how close a password was, would be a
+            // free oracle for anyone on the LAN.
+            let has = crate::auth::password_is_set(&app.cfg.db_path);
+            let authed = session_valid(app, &req.headers, conn);
+            (200, json_ct, json_bytes(&json!({
+                "ok": true,
+                "required": has,
+                "authenticated": authed,
+                "has_password": has,
+                "needs_setup": !has,
+            })), true)
+        }
+        ("POST", p) if p == "/api/auth/login" || p == "/status/api/auth/login" => {
+            if req.body.len() > MAX_BODY {
+                return (413, json_ct, json_bytes(&json!({"ok": false, "error": "body too large"})), false);
+            }
+            // Serialised: bcrypt at cost 12 takes 376 ms on the head, so five concurrent attempts
+            // would starve the poller on a two-core box. One at a time caps it at one core.
+            let _guard = app.login_lock.lock().unwrap_or_else(|e| e.into_inner());
+
+            let peer = peer_key(conn);
+            if let Some(wait) = app.login_limiter.retry_after(&peer) {
+                return (429, json_ct, json_bytes(&json!({
+                    "ok": false,
+                    "error": format!("too many attempts; try again in {wait} seconds"),
+                    "retry_after": wait,
+                })), false);
+            }
+
+            let body: Value = serde_json::from_slice(&req.body).unwrap_or(json!({}));
+            let password = body.get("password").and_then(|v| v.as_str()).unwrap_or("");
+            if crate::auth::verify_password(&app.cfg.db_path, password) {
+                app.login_limiter.clear(&peer);
+                match crate::auth::mint(&app.cfg.db_path) {
+                    Some(token) => {
+                        let exp = crate::auth::verify(&app.cfg.db_path, &token).unwrap_or(0);
+                        let secure = app.tls_enabled.load(std::sync::atomic::Ordering::Relaxed);
+                        *cookie = Some(crate::auth::set_cookie(&token, exp - crate::auth::now_s(), secure));
+                        (200, json_ct, json_bytes(&json!({"ok": true})), false)
+                    }
+                    None => (500, json_ct, json_bytes(&json!({"ok": false, "error": "cannot mint a session"})), false),
+                }
+            } else {
+                app.login_limiter.record_failure(&peer);
+                // Deliberately the same message whether the password is wrong or absent: whether a
+                // password exists is already answered by /api/auth/status, and nothing else should be.
+                (401, json_ct, json_bytes(&json!({"ok": false, "error": "wrong password"})), false)
+            }
+        }
+        ("POST", p) if p == "/api/auth/setup" || p == "/status/api/auth/setup" => {
+            // First run only. Refuses once a password exists, so it is never a second door.
+            if req.body.len() > MAX_BODY {
+                return (413, json_ct, json_bytes(&json!({"ok": false, "error": "body too large"})), false);
+            }
+            if crate::auth::password_is_set(&app.cfg.db_path) {
+                return (409, json_ct, json_bytes(&json!({
+                    "ok": false,
+                    "error": "a password is already set; sign in and change it there",
+                })), false);
+            }
+            let body: Value = serde_json::from_slice(&req.body).unwrap_or(json!({}));
+            let token = body.get("token").and_then(|v| v.as_str()).unwrap_or("");
+            let password = body.get("password").and_then(|v| v.as_str()).unwrap_or("");
+            if !crate::auth::setup_token_matches(&app.cfg.db_path, token) {
+                return (401, json_ct, json_bytes(&json!({
+                    "ok": false,
+                    "error": "that setup token is not right; it is in the setup-token file in the data directory",
+                })), false);
+            }
+            match crate::auth::set_password(&app.cfg.db_path, password) {
+                Ok(()) => {
+                    // Consumed: the token is cleared in the same operation that sets the password.
+                    let _ = crate::auth::clear_setup_token(&app.cfg.db_path);
+                    (200, json_ct, json_bytes(&json!({"ok": true})), false)
+                }
+                Err(e) => (400, json_ct, json_bytes(&json!({"ok": false, "error": e})), false),
+            }
+        }
+        ("POST", p) if p == "/api/auth/password" || p == "/status/api/auth/password" => {
+            // Set, change, or remove. Requires a session, which the gate above has already checked.
+            if req.body.len() > MAX_BODY {
+                return (413, json_ct, json_bytes(&json!({"ok": false, "error": "body too large"})), false);
+            }
+            let body: Value = serde_json::from_slice(&req.body).unwrap_or(json!({}));
+            let action = body.get("action").and_then(|v| v.as_str()).unwrap_or("change");
+            let current = body.get("current").and_then(|v| v.as_str()).unwrap_or("");
+            let failure = |msg: &str| {
+                (403, json_ct.clone(), json_bytes(&json!({"ok": false, "error": msg})), false)
+            };
+
+            // Removing needs the current password too: without it, anyone holding a phone left
+            // unlocked could open the port to the whole LAN.
+            if crate::auth::password_is_set(&app.cfg.db_path)
+                && !crate::auth::verify_password(&app.cfg.db_path, current)
+            {
+                return failure("the current password is not right");
+            }
+
+            match action {
+                "remove" => match crate::auth::remove_password(&app.cfg.db_path) {
+                    Ok(()) => {
+                        *cookie = Some(crate::auth::clear_cookie());
+                        (200, json_ct, json_bytes(&json!({
+                            "ok": true, "removed": true,
+                            "warning": "the dashboard is now open to anyone who can reach this port",
+                        })), false)
+                    }
+                    Err(e) => (500, json_ct, json_bytes(&json!({"ok": false, "error": e})), false),
+                },
+                _ => {
+                    let next = body.get("password").and_then(|v| v.as_str()).unwrap_or("");
+                    match crate::auth::set_password(&app.cfg.db_path, next) {
+                        Ok(()) => {
+                            // set_password rotated the secret, so re-issue to this device: the whole
+                            // point is that other devices are logged out and this one is not.
+                            match crate::auth::mint(&app.cfg.db_path) {
+                                Some(token) => {
+                                    let exp = crate::auth::verify(&app.cfg.db_path, &token).unwrap_or(0);
+                                    let secure = app.tls_enabled.load(std::sync::atomic::Ordering::Relaxed);
+                                    *cookie = Some(crate::auth::set_cookie(
+                                        &token,
+                                        exp - crate::auth::now_s(),
+                                        secure,
+                                    ));
+                                }
+                                None => {}
+                            }
+                            (200, json_ct, json_bytes(&json!({"ok": true})), false)
+                        }
+                        Err(e) => (400, json_ct, json_bytes(&json!({"ok": false, "error": e})), false),
+                    }
+                }
+            }
+        }
+        ("POST", p) if p == "/api/auth/logout-all" || p == "/status/api/auth/logout-all" => {
+            // One button, one purpose: a lost phone. Rotating the secret ends every session,
+            // including this one, so a fresh cookie is issued here.
+            if let Err(e) = crate::auth::rotate_secret(&app.cfg.db_path) {
+                return (500, json_ct, json_bytes(&json!({"ok": false, "error": e})), false);
+            }
+            match crate::auth::mint(&app.cfg.db_path) {
+                Some(token) => {
+                    let exp = crate::auth::verify(&app.cfg.db_path, &token).unwrap_or(0);
+                    let secure = app.tls_enabled.load(std::sync::atomic::Ordering::Relaxed);
+                    *cookie = Some(crate::auth::set_cookie(&token, exp - crate::auth::now_s(), secure));
+                    (200, json_ct, json_bytes(&json!({"ok": true, "detail": "every other device is signed out"})), false)
+                }
+                None => (500, json_ct, json_bytes(&json!({"ok": false, "error": "cannot mint a session"})), false),
+            }
+        }
+        ("POST", p) if p == "/api/auth/logout" || p == "/status/api/auth/logout" => {
+            *cookie = Some(crate::auth::clear_cookie());
+            (200, json_ct, json_bytes(&json!({"ok": true})), false)
         }
         ("GET" | "HEAD", p) if p == "/api/health" || p == "/status/api/health" => {
             (200, json_ct, json_bytes(&json!({"ok": true, "uptime_s": now() - app.started_ts})), false)
@@ -828,6 +1142,30 @@ fn route(req: &Request, app: &Arc<App>, conn: ConnMeta) -> (u16, String, Vec<u8>
                     })), false)
                 }
                 Err(e) => (500, json_ct, json_bytes(&json!({"ok": false, "error": e})), false),
+            }
+        }
+        ("POST", _) if normalized == "/api/auth/tls" => {
+            // Import a certificate pair. Validated here, in the service's own context, because a
+            // path that parses from your shell may be unreadable to the unit that will open it.
+            if req.body.len() > MAX_BODY {
+                return (413, json_ct, json_bytes(&json!({"ok": false, "error": "body too large"})), false);
+            }
+            let body: Value = serde_json::from_slice(&req.body).unwrap_or(json!({}));
+            let cert = body.get("cert").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+            let key = body.get("key").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+            match crate::server::check_tls_pair(&cert, &key) {
+                Ok(()) => {
+                    let path = crate::settings::target(&app.cfg);
+                    match crate::settings::apply(&path, &json!({ "tls_cert": cert, "tls_key": key })) {
+                        Ok(_) => (200, json_ct, json_bytes(&json!({
+                            "ok": true,
+                            "detail": "certificate accepted. Restart this machine's service to use it.",
+                            "restart_required": true,
+                        })), false),
+                        Err(e) => (500, json_ct, json_bytes(&json!({"ok": false, "error": e})), false),
+                    }
+                }
+                Err(e) => (400, json_ct, json_bytes(&json!({"ok": false, "error": e})), false),
             }
         }
         ("GET" | "HEAD", _) if normalized == "/api/autostart" => {
@@ -1246,6 +1584,41 @@ pub fn listen(
     Ok(actual)
 }
 
+/// Validate an imported certificate pair without starting a listener.
+///
+/// Reuses `tls_config`, so the check is the same code that will open the files at boot. A pair that
+/// passes here cannot fail later for a reason this did not see, apart from the files being moved.
+pub fn check_tls_pair(cert: &str, key: &str) -> Result<(), String> {
+    if cert.is_empty() || key.is_empty() {
+        return Err("both a certificate and a key are required".to_string());
+    }
+    let cert_path = PathBuf::from(cert);
+    let key_path = PathBuf::from(key);
+    if !cert_path.is_file() {
+        return Err(format!("no readable file at {cert}"));
+    }
+    if !key_path.is_file() {
+        return Err(format!("no readable file at {key}"));
+    }
+    // `with_single_cert` refuses a key that does not match the certificate, so this one call
+    // catches a mismatched pair as well as an unparseable file.
+    tls_config(&cert_path, &key_path).map_err(|e| {
+        let text = e.to_string();
+        // Name the likely causes instead of appending a guess to every failure. An X509v1
+        // certificate is common from a bare `openssl req -x509` and rustls will not accept it,
+        // which previously read as a key mismatch and sent the operator looking in the wrong place.
+        if text.contains("UnsupportedCertVersion") {
+            "this certificate is X509 version 1. rustls needs version 3: regenerate with              `-addext subjectAltName=DNS:your.host` (any extension forces v3)."
+                .to_string()
+        } else if text.contains("key") || text.contains("Key") {
+            format!("{text}. The key may not match this certificate.")
+        } else {
+            text
+        }
+    })?;
+    Ok(())
+}
+
 /// Build a rustls server config from a PEM certificate chain and key.
 fn tls_config(cert_path: &PathBuf, key_path: &PathBuf) -> std::io::Result<rustls::ServerConfig> {
     static ONCE: std::sync::Once = std::sync::Once::new();
@@ -1302,7 +1675,17 @@ mod tests {
             .filter(|r| DASHBOARD_ROUTES.contains(r))
             .collect();
         assert_eq!(shared, vec!["/api/report", "/api/health"]);
-        assert_eq!(DASHBOARD_ROUTES.len(), 20, "a route was added; classify it deliberately");
+        assert_eq!(DASHBOARD_ROUTES.len(), 27, "a route was added; classify it deliberately");
+
+        // Auth routes are on the dashboard and split into public and session-required. Setup is
+        // public but refuses once a password exists; status and login are public; the rest need a
+        // session, which the gate enforces because they are absent from PUBLIC_ROUTES.
+        for r in ["/api/auth/status", "/api/auth/login", "/api/auth/logout", "/api/auth/setup"] {
+            assert!(is_public(r), "{r} must be reachable without a session");
+        }
+        for r in ["/api/auth/password", "/api/auth/logout-all"] {
+            assert!(!is_public(r), "{r} must require a session");
+        }
     }
 
     #[test]

@@ -1,5 +1,6 @@
 //! Library root: every module is reachable for tests and for the binary.
 
+pub mod auth;
 pub mod catalog;
 pub mod config;
 pub mod db;

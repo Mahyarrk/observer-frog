@@ -8,7 +8,7 @@ use rusqlite::{Connection, OpenFlags};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub const SCHEMA_VERSION: i64 = 9;
+pub const SCHEMA_VERSION: i64 = 10;
 pub const RAW_RETENTION_S: i64 = 86_400; // 24 h of per-check rows
 pub const ROLLUP_RETENTION_S: i64 = 2_592_000; // 30 days of hourly counters
 
@@ -16,6 +16,14 @@ const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS schema_version (
     version    INTEGER NOT NULL,
     applied_ts INTEGER NOT NULL
+);
+
+-- Operator credentials. Created here as well as in the v10 migration because a fresh database
+-- stamps the current version without running the ladder, so a table that only exists in the
+-- migration is a table new installs never get.
+CREATE TABLE IF NOT EXISTS settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS service_checks (
@@ -345,6 +353,19 @@ pub fn init(path: &Path) -> rusqlite::Result<i64> {
                     [],
                 )?;
                 version = 9;
+            }
+            if version < 10 {
+                // Operator credentials, deliberately not in config.toml: a hash in a config file
+                // gets copied into dotfiles repositories and pasted into issue reports. The session
+                // secret lives here too, so a restart does not log every device out.
+                conn.execute(
+                    "CREATE TABLE IF NOT EXISTS settings (
+                        key   TEXT PRIMARY KEY,
+                        value TEXT NOT NULL DEFAULT ''
+                     )",
+                    [],
+                )?;
+                version = 10;
             }
             conn.execute(
                 "UPDATE schema_version SET version = ?, applied_ts = ?",

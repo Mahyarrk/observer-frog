@@ -80,6 +80,13 @@ pub struct Config {
     /// both, either, or neither. This replaced the `report --to` CLI flag, which could only ever
     /// make a process do the second thing.
     pub report_to: Option<String>,
+    /// PEM certificate and key. Imported by the operator, never minted by this program: it
+    /// terminates TLS and nothing else.
+    ///
+    /// In the config rather than only as flags because an installed service cannot pass flags, and
+    /// a certificate that does not survive a reboot is not a certificate you can use.
+    pub tls_cert: Option<PathBuf>,
+    pub tls_key: Option<PathBuf>,
     /// Name of the environment variable holding this node's token. Never the token itself: a
     /// config file with a secret in it is a config file that gets committed.
     pub token_env: String,
@@ -366,6 +373,16 @@ pub fn load(path: Option<&Path>) -> Result<Config, ConfigError> {
 
     // A node that reports to itself would double-count its own samples and never show its own
     // local view, so refuse it here rather than loop at runtime.
+    // TLS paths are validated here only for being a pair; whether the files parse and match each
+    // other is the listener's job, because that is where they are opened.
+    let tls_cert = str_of(raw.get("tls_cert")).trim().to_string();
+    let tls_key = str_of(raw.get("tls_key")).trim().to_string();
+    if tls_cert.is_empty() != tls_key.is_empty() {
+        return Err(ConfigError(format!(
+            "{where_}: tls_cert and tls_key must be set together, or neither"
+        )));
+    }
+
     let report_to = match str_of(raw.get("report_to")) {
         s if s.trim().is_empty() => None,
         s => {
@@ -417,6 +434,8 @@ pub fn load(path: Option<&Path>) -> Result<Config, ConfigError> {
         discover,
         report_port,
         report_to,
+        tls_cert: if tls_cert.is_empty() { None } else { Some(PathBuf::from(tls_cert)) },
+        tls_key: if tls_key.is_empty() { None } else { Some(PathBuf::from(tls_key)) },
         token_env,
         token_file,
         services,

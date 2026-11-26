@@ -133,6 +133,86 @@
     }
 
     /* Fixed 1px iOS Status Bar Color Sampler Element */
+    /* ---- Auth gate ---------------------------------------------------- */
+    .auth-gate {
+      min-height: 100dvh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px 20px calc(24px + env(safe-area-inset-bottom));
+      background: var(--bg, #0b1329);
+    }
+    .auth-gate[hidden] { display: none; }
+
+    .auth-card {
+      width: 100%;
+      max-width: 380px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      padding: 22px 20px;
+      border: 1px solid rgba(148, 163, 184, 0.2);
+      border-radius: var(--r-md, 12px);
+      background: rgba(15, 23, 42, 0.9);
+    }
+    .auth-brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--accent-blue, #3b82f6);
+      font-weight: 700;
+      font-size: 15px;
+      letter-spacing: 0.01em;
+    }
+    .auth-hint { margin: 0; font-size: 12.5px; line-height: 1.5; opacity: 0.75; }
+    .auth-card form { display: flex; flex-direction: column; gap: 8px; }
+    .auth-card form[hidden] { display: none; }
+    .auth-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; opacity: 0.6; }
+
+    /* 16px minimum: anything smaller makes iOS Safari zoom the page on focus. */
+    .auth-input {
+      font: inherit;
+      font-size: 16px;
+      padding: 11px 12px;
+      color: inherit;
+      background: rgba(2, 6, 23, 0.6);
+      border: 1px solid rgba(148, 163, 184, 0.25);
+      border-radius: 10px;
+    }
+    .auth-input:focus-visible { outline: 2px solid var(--accent-blue, #3b82f6); outline-offset: 1px; }
+
+    .auth-btn {
+      margin-top: 4px;
+      min-height: 44px;
+      font: inherit;
+      font-size: 14px;
+      font-weight: 600;
+      color: #f8fafc;
+      background: rgba(59, 130, 246, 0.22);
+      border: 1px solid rgba(59, 130, 246, 0.5);
+      border-radius: 10px;
+      cursor: pointer;
+    }
+    .auth-btn:disabled { opacity: 0.6; cursor: default; }
+    .auth-note { margin: 0; font-size: 12px; line-height: 1.5; color: var(--down-color, #ef4444); min-height: 1em; }
+
+    /* The curtain shown while the app is backgrounded, so the iOS app switcher captures nothing.
+       Opaque and instant: this is the one place where a transition would be a mistake. */
+    .privacy-curtain {
+      position: fixed;
+      inset: 0;
+      z-index: 9999;
+      background: #0b1329;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: rgba(148, 163, 184, 0.5);
+      font-family: var(--font-mono, monospace);
+      font-size: 12px;
+      letter-spacing: 0.08em;
+    }
+    .privacy-curtain[hidden] { display: none; }
+
     .ios-status-bar-sampler {
       position: fixed;
       top: 0;
@@ -1978,7 +2058,46 @@
     </div>
   </header>
 
-  <div class="container">
+  <!-- Auth shell ------------------------------------------------------------
+       Nothing that names a service exists in the DOM until the session is confirmed. This is why
+       login replaces the app rather than covering it: an overlay leaves the real markup behind the
+       curtain, where the inspector reads every hostname without ever signing in. -->
+  <div id="auth-gate" class="auth-gate">
+    <div class="auth-card">
+      <div class="auth-brand">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <circle cx="7.4" cy="8.6" r="3.5"/><circle cx="16.6" cy="8.6" r="3.5"/>
+          <ellipse cx="12" cy="15" rx="8.6" ry="6.6"/>
+        </svg>
+        <span>Observer Frog</span>
+      </div>
+      <p class="auth-hint" id="auth-hint">Checking…</p>
+
+      <!-- First run: no password exists yet, so the setup token from the data directory is asked for. -->
+      <form id="auth-setup-form" hidden>
+        <label class="auth-label" for="auth-token">Setup token</label>
+        <input class="auth-input" id="auth-token" type="text" autocomplete="off" autocapitalize="off"
+               spellcheck="false" placeholder="from the setup-token file" />
+        <label class="auth-label" for="auth-new">Choose a password</label>
+        <input class="auth-input" id="auth-new" type="password" autocomplete="new-password" />
+        <label class="auth-label" for="auth-new2">Repeat it</label>
+        <input class="auth-input" id="auth-new2" type="password" autocomplete="new-password" />
+        <button class="auth-btn" type="submit" id="auth-setup-btn">Claim this machine</button>
+      </form>
+
+      <form id="auth-login-form" hidden>
+        <label class="auth-label" for="auth-password">Password</label>
+        <input class="auth-input" id="auth-password" type="password" autocomplete="current-password" />
+        <button class="auth-btn" type="submit" id="auth-login-btn">Sign in</button>
+      </form>
+
+      <p class="auth-note" id="auth-note"></p>
+    </div>
+  </div>
+
+  <div class="privacy-curtain" id="privacy-curtain" hidden>OBSERVER FROG</div>
+
+  <div class="container" id="app-shell" hidden>
     <section id="view-live">
     <!-- Top Overview Banner -->
     <section id="overview-banner" class="overview-banner state-up" aria-live="polite">
@@ -2022,6 +2141,7 @@
           <button class="settings-subtab active" type="button" role="tab" data-subtab="node">This Node</button>
           <button class="settings-subtab" type="button" role="tab" data-subtab="services">Services</button>
           <button class="settings-subtab" type="button" role="tab" data-subtab="pairing">Pairing</button>
+          <button class="settings-subtab" type="button" role="tab" data-subtab="access">Access</button>
         </div>
 
         <div class="settings-panel" data-panel="node">
@@ -2127,6 +2247,65 @@
             </div>
           </div>
         </div>
+        </div>
+
+        <div class="settings-panel" data-panel="access" hidden>
+          <div class="settings-card">
+            <h2 class="settings-title">Password</h2>
+            <p class="settings-hint">
+              One password guards this dashboard. Anything that names a service or a machine is only
+              sent after you sign in.
+            </p>
+            <label class="settings-field">
+              <span>Current password</span>
+              <input type="password" id="pw-current" autocomplete="current-password" />
+            </label>
+            <label class="settings-field">
+              <span>New password</span>
+              <input type="password" id="pw-new" autocomplete="new-password" />
+            </label>
+            <label class="settings-field">
+              <span>Repeat the new one</span>
+              <input type="password" id="pw-new2" autocomplete="new-password" />
+            </label>
+            <button class="settings-btn" id="pw-save" type="button">Change password</button>
+            <p class="settings-note" id="pw-note"></p>
+            <h3 class="pair-subtitle">Every other device</h3>
+            <p class="settings-hint">
+              Signs out everything except this browser. Use it if a phone is lost.
+            </p>
+            <button class="settings-btn" id="pw-logout-all" type="button">Sign out other devices</button>
+            <h3 class="pair-subtitle">Sign out</h3>
+            <button class="settings-btn" id="pw-logout" type="button">Sign out of this browser</button>
+            <h3 class="pair-subtitle">Remove the password</h3>
+            <p class="settings-hint" style="color: var(--down-color);">
+              This opens the dashboard to anyone who can reach this port, with no sign-in at all.
+            </p>
+            <button class="settings-btn" id="pw-remove" type="button">Remove the password</button>
+            <p class="settings-note" id="pw-remove-note"></p>
+          </div>
+
+          <div class="settings-card">
+            <h2 class="settings-title">TLS certificate</h2>
+            <p class="settings-hint">
+              This program terminates TLS; it does not issue or renew anything. Point it at a
+              certificate you generated elsewhere. Both files are checked here, in the same context
+              the service will open them from.
+            </p>
+            <label class="settings-field">
+              <span>Certificate (PEM)</span>
+              <input type="text" id="tls-cert" placeholder="/path/to/fullchain.pem" spellcheck="false" />
+            </label>
+            <label class="settings-field">
+              <span>Private key (PEM)</span>
+              <input type="text" id="tls-key" placeholder="/path/to/privkey.pem" spellcheck="false" />
+            </label>
+            <button class="settings-btn" id="tls-save" type="button">Check and save</button>
+            <p class="settings-note" id="tls-note"></p>
+            <p class="settings-hint">
+              A certificate is read when the listener binds, so this takes effect after a restart.
+            </p>
+          </div>
         </div>
 
         <div class="settings-panel" data-panel="pairing" hidden>
@@ -2240,7 +2419,7 @@
       const API_BASE = (window.location.pathname.replace(/\/$/, '') || '');
       // Bump on every shell change. Declared before first use: a `const` referenced above its
       // declaration throws a TDZ error and takes the whole script down (it did).
-      const BUILD = 'of-33';
+      const BUILD = 'of-35';
       // Show the address actually in use, not a baked-in host.
       (function () {
         const el = document.getElementById('brand-url');
@@ -2266,9 +2445,13 @@
       let API_ENDPOINT = API_BASE + '/api/status';
       const POLL_ENDPOINT = API_BASE + '/api/poll';
       const POLL_INTERVAL_SEC = 30;
-      const STORAGE_KEY = 'observerfrog_status_cache_v1';
+      // No names, no counts. F11 used to say "paint the last snapshot from localStorage before any
+      // network call" — correct without a password, and a leak with one, because the snapshot names
+      // every service and machine on the network. Nothing that names a service is persisted now:
+      // only preference. The shell is cached so the app still launches instantly; the data is
+      // fetched, and until it arrives the page shows a neutral view.
       const HISTORY_STORAGE_KEY = 'observerfrog_rolling_history_v1';
-      const IGNORED_STORAGE_KEY = 'observerfrog_ignored_services_v1';
+
       const API_HISTORY_ENDPOINT = API_BASE + '/api/history';
       const API_IGNORE_ENDPOINT = API_BASE + '/api/ignore';
       const HISTORY_CACHE_KEY = 'observerfrog_history_cache_v1';
@@ -2392,6 +2575,140 @@
       const elCountdownText = document.getElementById('countdown-text');
       const elCountdownCircle = document.getElementById('countdown-circle');
       const elPollProgressBar = document.getElementById('poll-progress-bar');
+
+      // ---------------- auth gate -------------------------------------------
+      // The gate replaces the app rather than covering it. `app-shell` stays hidden (no service
+      // name in the DOM) until /api/auth/status says there is a session; a 401 from any fetch sends
+      // it back to hidden. The service worker is never consulted: WebKit kills idle workers in
+      // about thirty seconds, so no access decision may depend on one running.
+
+      function showGate(mode, hint, note) {
+        const gate = document.getElementById('auth-gate');
+        const shell = document.getElementById('app-shell');
+        const setup = document.getElementById('auth-setup-form');
+        const login = document.getElementById('auth-login-form');
+        const hintEl = document.getElementById('auth-hint');
+        const noteEl = document.getElementById('auth-note');
+        if (!gate || !shell) return;
+        gate.hidden = false;
+        shell.hidden = true;
+        if (setup) setup.hidden = mode !== 'setup';
+        if (login) login.hidden = mode !== 'login';
+        if (hintEl && hint) hintEl.textContent = hint;
+        if (noteEl) noteEl.textContent = note || '';
+      }
+
+      function showApp() {
+        const gate = document.getElementById('auth-gate');
+        const shell = document.getElementById('app-shell');
+        if (gate) gate.hidden = true;
+        if (shell) shell.hidden = false;
+      }
+
+      async function checkAuth() {
+        let d;
+        try {
+          const r = await fetch('api/auth/status', { cache: 'no-store' });
+          d = await r.json();
+        } catch (_) {
+          // The LAN is unreachable. Neutral message, no names: this used to paint a cached
+          // snapshot here, which is the leak F11 reversal removes.
+          showGate('login', 'Cannot reach this machine right now.', 'Reconnect to the network and try again.');
+          return;
+        }
+        if (d && d.needs_setup) {
+          showGate('setup', 'No password is set yet. Type the token from the setup-token file in this machine\'s data directory, then choose a password.');
+          return;
+        }
+        if (d && d.authenticated) {
+          showApp();
+          return;
+        }
+        showGate('login', 'Sign in to see this dashboard.');
+      }
+
+      function submitOnce(formId, buttonId, work) {
+        const form = document.getElementById(formId);
+        if (!form) return;
+        form.addEventListener('submit', async (ev) => {
+          ev.preventDefault();
+          const btn = document.getElementById(buttonId);
+          const note = document.getElementById('auth-note');
+          if (btn) btn.disabled = true;
+          try {
+            const msg = await work();
+            if (msg) { if (note) note.textContent = msg; }
+          } finally {
+            if (btn) btn.disabled = false;
+          }
+        });
+      }
+
+      submitOnce('auth-login-form', 'auth-login-btn', async () => {
+        const el = document.getElementById('auth-password');
+        const password = el ? el.value : '';
+        try {
+          const r = await fetch('api/auth/login', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ password }),
+          });
+          const d = await r.json().catch(() => ({}));
+          if (r.ok && d.ok) {
+            if (el) el.value = '';
+            document.getElementById('auth-note').textContent = '';
+            await boot();
+            return '';
+          }
+          return d.error || 'that did not work';
+        } catch (e) {
+          return 'sign in failed: ' + e;
+        }
+      });
+
+      submitOnce('auth-setup-form', 'auth-setup-btn', async () => {
+        const token = (document.getElementById('auth-token') || {}).value || '';
+        const a = (document.getElementById('auth-new') || {}).value || '';
+        const b = (document.getElementById('auth-new2') || {}).value || '';
+        if (a !== b) return 'the two passwords do not match';
+        try {
+          const r = await fetch('api/auth/setup', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token, password: a }),
+          });
+          const d = await r.json().catch(() => ({}));
+          if (r.ok && d.ok) {
+            // Setting the password also rotates the secret, so sign in properly next.
+            showGate('login', 'Password set. Sign in.', '');
+            return '';
+          }
+          return d.error || 'that did not work';
+        } catch (e) {
+          return 'setup failed: ' + e;
+        }
+      });
+
+      // Any 401 anywhere: back to the gate, and stop the timer. A poll hammering a 401 every
+      // thirty seconds is noise in the log and battery on the phone.
+      async function onUnauthorised() {
+        if (tickTimer) { clearInterval(tickTimer); tickTimer = null; }
+        currentData = SEED_DATA;
+        await checkAuth();
+      }
+
+      // The app switcher snapshots the rendered DOM. Cover it on the way out, and keep it covered
+      // until the session is confirmed on the way back in.
+      (function installCurtain() {
+        const curtain = document.getElementById('privacy-curtain');
+        if (!curtain) return;
+        const hide = () => { curtain.hidden = false; };
+        const reveal = () => { curtain.hidden = true; };
+        document.addEventListener('visibilitychange', () => {
+          if (document.visibilityState === 'hidden') hide();
+          else if (!document.getElementById('app-shell').hidden) reveal();
+        });
+        window.addEventListener('pagehide', hide);
+      })();
+
       const elRefreshBtn = document.getElementById('refresh-btn');
       const elRefreshIcon = document.getElementById('refresh-icon');
       const elConnectionAlert = document.getElementById('connection-alert');
@@ -2404,35 +2721,22 @@
         return STORAGE_KEY + (node ? '__' + node : '');
       }
 
+      // Deliberately inert. These two used to persist the whole /api/status payload so an offline
+      // launch was instant. That payload names every service and machine, which is exactly what the
+      // operator password now protects, so it must not be readable by whoever is holding the phone.
+      // Kept as functions because the call sites read better than a scattered deletion.
       function loadCachedData() {
-        try {
-          const raw = localStorage.getItem(cacheKeyFor(activeNode));
-          return raw ? JSON.parse(raw) : null;
-        } catch (_) {
-          return null;
-        }
+        return null;
       }
 
-      function saveCachedData(data) {
-        try {
-          localStorage.setItem(cacheKeyFor(activeNode), JSON.stringify(data));
-        } catch (_) {}
-      }
+      function saveCachedData(_data) {}
 
+      // Inert for the same reason as the status cache: rolling history is keyed by service id.
       function loadRollingHistory() {
-        try {
-          const raw = localStorage.getItem(HISTORY_STORAGE_KEY);
-          return raw ? JSON.parse(raw) : {};
-        } catch (_) {
-          return {};
-        }
+        return {};
       }
 
-      function saveRollingHistory(hist) {
-        try {
-          localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(hist));
-        } catch (_) {}
-      }
+      function saveRollingHistory(_hist) {}
 
       function normalizeStatus(rawStatus) {
         const s = String(rawStatus || '').toLowerCase().trim();
@@ -2944,6 +3248,15 @@
             });
           }
           clearTimeout(timeoutId);
+
+          // A dead session is not an outage: show the gate rather than an offline banner, and stop
+          // the timer so it does not ask again every thirty seconds.
+          if (response.status === 401) {
+            clearTimeout(timeoutId);
+            isFetching = false;
+            onUnauthorised();
+            return;
+          }
 
           if (!response.ok) {
             throw new Error(`HTTP ${response.status}`);
@@ -3498,6 +3811,92 @@
             settingsNote(d.detail || (want ? 'autostart on' : 'autostart off'), 'set-autostart-note');
           } catch (e) { settingsNote('could not change autostart: ' + e, 'set-autostart-note'); }
         });
+
+      // ---- Access tab: password management --------------------------------
+      function pwNote(msg, bad) {
+        const el = document.getElementById('pw-note');
+        if (!el) return;
+        el.textContent = msg || '';
+        el.style.color = bad ? 'var(--down-color)' : '';
+      }
+
+      const val = (id) => (document.getElementById(id) || {}).value || '';
+      const clear = (id) => { const e = document.getElementById(id); if (e) e.value = ''; };
+
+      async function postPassword(body) {
+        const r = await fetch('api/auth/password', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const d = await r.json().catch(() => ({}));
+        return { ok: r.ok && d.ok, d };
+      }
+
+
+      on('tls-save', async () => {
+        const note = document.getElementById('tls-note');
+        const btn = document.getElementById('tls-save');
+        if (btn) btn.disabled = true;
+        try {
+          const r = await fetch('api/auth/tls', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ cert: val('tls-cert'), key: val('tls-key') }),
+          });
+          const d = await r.json().catch(() => ({}));
+          if (note) {
+            note.textContent = d.ok ? (d.detail || 'saved') : (d.error || 'that pair was refused');
+            note.style.color = d.ok ? '' : 'var(--down-color)';
+          }
+        } catch (e) {
+          if (note) note.textContent = 'failed: ' + e;
+        } finally {
+          if (btn) btn.disabled = false;
+        }
+      });
+
+      on('pw-save', async () => {
+        const a = val('pw-new');
+        const b = val('pw-new2');
+        if (a !== b) { pwNote('the two new passwords do not match', true); return; }
+        const res = await postPassword({ action: 'change', current: val('pw-current'), password: a });
+        if (res.ok) {
+          ['pw-current', 'pw-new', 'pw-new2'].forEach(clear);
+          pwNote('password changed. other devices are signed out; this one stays in.');
+        } else {
+          pwNote(res.d.error || 'could not change it', true);
+        }
+      });
+
+      on('pw-logout-all', async () => {
+        try {
+          const r = await fetch('api/auth/logout-all', { method: 'POST' });
+          const d = await r.json().catch(() => ({}));
+          pwNote(r.ok && d.ok ? (d.detail || 'other devices signed out') : (d.error || 'failed'), !r.ok);
+        } catch (e) { pwNote('failed: ' + e, true); }
+      });
+
+      on('pw-logout', async () => {
+        try { await fetch('api/auth/logout', { method: 'POST' }); } catch (_) {}
+        currentData = SEED_DATA;
+        if (tickTimer) { clearInterval(tickTimer); tickTimer = null; }
+        await checkAuth();
+      });
+
+      on('pw-remove', async () => {
+        const res = await postPassword({ action: 'remove', current: val('pw-current') });
+        const el = document.getElementById('pw-remove-note');
+        if (res.ok) {
+          clear('pw-current');
+          if (el) el.textContent = res.d.warning || 'password removed';
+          currentData = SEED_DATA;
+          if (tickTimer) { clearInterval(tickTimer); tickTimer = null; }
+          await checkAuth();
+          await boot();
+        } else if (el) {
+          el.textContent = res.d.error || 'could not remove it';
+        }
+      });
+
         on('set-add-open', async () => {
           const panel = document.getElementById('set-add-panel');
           const btn = document.getElementById('set-add-open');
@@ -3658,16 +4057,12 @@
       let historyData = loadCachedHistory();
       let activeTab = 'live';
 
+      // Inert: the incident log names services and machines.
       function loadCachedHistory() {
-        try {
-          const raw = localStorage.getItem(HISTORY_CACHE_KEY);
-          return raw ? JSON.parse(raw) : null;
-        } catch (_) { return null; }
+        return null;
       }
 
-      function saveCachedHistory(d) {
-        try { localStorage.setItem(HISTORY_CACHE_KEY, JSON.stringify(d)); } catch (_) {}
-      }
+      function saveCachedHistory(_d) {}
 
       function fmtDur(sec) {
         sec = Math.max(0, Math.round(Number(sec) || 0));
@@ -4044,16 +4439,20 @@
       // The stored node must be restored before the first fetch, or the page shows one node's
       // name with another node's services: loadNodes reads the saved selection, so awaiting it
       // is what keeps the dropdown and the data describing the same machine on a hard refresh.
-      (async () => {
+      // One entry point, used on load and after a successful sign-in.
+      async function boot() {
+        await checkAuth();
+        const shell = document.getElementById('app-shell');
+        if (!shell || shell.hidden) return; // no session: nothing to load, nothing to leak
         await loadNodes();
-        // The node is known only now, so re-read that node's cache; rendering the pre-restore
-        // value here is what showed one machine's services under another's name.
-        currentData = loadCachedData() || SEED_DATA;
+        currentData = SEED_DATA;
         updateRollingHistory(currentData);
         renderDashboard(currentData);
         await fetchStatus(false);
         startPollingLoop();
-      })();
+      }
+
+      boot();
     })();
   </script>
 </body>
