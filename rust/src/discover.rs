@@ -220,12 +220,14 @@ pub fn candidates(entries: &[Entry], host: &str, monitored: &[String]) -> Vec<Ca
         let mut state = CAND_NOT_RUNNING;
         let mut detail = String::new();
 
+        // Already-monitored entries are not discovery results. Listing them said "found" about a
+        // service the sweep never looked for — searxng on a moved port appeared as found simply
+        // because it was in the config — and the same list is what made every catalog entry look
+        // installed. Discovery reports what it actually found, and nothing else.
         if monitored.iter().any(|m| m == &entry.id) {
-            state = CAND_ALREADY;
-            // Still offered: the operator may be looking for a service they already run, to change
-            // its port or simply to confirm it is watched. Hiding it makes the list a puzzle.
-            detail = "already on this dashboard".into();
-        } else if entry.probe == "http" || entry.probe == "tcp" {
+            continue;
+        }
+        if entry.probe == "http" || entry.probe == "tcp" {
             match entry.default_port {
                 0 => {}
                 port => {
@@ -282,39 +284,47 @@ pub fn discover(entries: &[Entry], host: &str) -> Vec<Service> {
     let listeners = listening();
     let mut found: Vec<Service> = Vec::new();
 
-    // Pass 1: HTTP entries whose catalog default port is listening, confirmed by signature.
+    // Pass 1: HTTP entries on their catalog default port, confirmed by signature.
     //
-    // Port only, deliberately. A service running on a non-default port is the operator's
-    // business: picking a custom port belongs in the admin UI as an explicit choice, not in a
-    // discovery sweep that would have to probe every open port to guess. Signature verification
-    // stays, because a port match alone would claim any listener squatting on 3001 is Uptime Kuma.
+    // The default port is asked directly rather than read from the socket table. On macOS an
+    // unprivileged `lsof` only shows the caller's own sockets, so a service running as root —
+    // nginx, anything started by a system manager — was invisible and could never be discovered.
+    // A connection to a closed port fails instantly, so asking costs nothing.
+    let _ = &listeners;
     for entry in entries.iter().filter(|e| e.probe == "http") {
-        if entry.default_port == 0 || !listeners.iter().any(|l| l.port == entry.default_port) {
+        if entry.default_port == 0 {
             continue;
         }
         let Ok(svc) = crate::catalog::instantiate(entry, host, None, "") else { continue };
-        if entry.has_signature() {
-            let (state, _, _) = crate::probes::probe_http(
-                &svc.target,
-                svc.expect_status,
-                &svc.contains,
-                svc.timeout,
-            );
-            if state != crate::probes::STATE_UP {
-                continue; // something else is on that port
-            }
+        let (state, _, _) = crate::probes::probe_http(
+            &svc.target,
+            svc.expect_status,
+            &svc.contains,
+            svc.timeout,
+        );
+        if state != crate::probes::STATE_UP {
+            continue; // nothing there, or something else wearing the port
+        }
+        // A signature is what makes this the service rather than anything else listening: without
+        // one, an HTTP answer alone is weaker evidence than a TCP connect, so it is not reported.
+        if !entry.has_signature() {
+            continue;
         }
         found.push(svc);
     }
 
-    // Pass 2: TCP entries, matched on port only. A bare TCP check has no signature, so this can
-    // only ever confirm "something accepts connections here".
+    // Pass 2: TCP entries, on their default port. A bare TCP check has no signature, so this can
+    // only ever confirm "something accepts connections here" — and it connects rather than reading
+    // the socket table, for the same root-owned reason as above.
     for entry in entries.iter().filter(|e| e.probe == "tcp") {
-        if entry.default_port == 0 || !listeners.iter().any(|l| l.port == entry.default_port) {
+        if entry.default_port == 0 {
             continue;
         }
         if let Ok(svc) = crate::catalog::instantiate(entry, host, None, "") {
-            found.push(svc);
+            let (state, _, _) = crate::probes::probe_tcp(&svc.target, svc.timeout);
+            if state == crate::probes::STATE_UP {
+                found.push(svc);
+            }
         }
     }
 

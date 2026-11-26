@@ -149,6 +149,32 @@ verify_contains = "SearXNG"
 notes = "Metasearch. The landing page names SearXNG. Defaults to 8080; deployments often move it."
 
 [[catalog]]
+id = "smp"
+name = "SimpleX SMP"
+group = "Messaging"
+probe = "tcp"
+default_port = 5223
+notes = "SimpleX message relay. Speaks its own protocol over TLS, so a TCP check is the honest probe."
+
+[[catalog]]
+id = "xftp"
+name = "SimpleX XFTP"
+group = "Messaging"
+probe = "tcp"
+default_port = 5224
+notes = "SimpleX file transfer server. TLS with a SimpleX CA, not HTTP."
+
+[[catalog]]
+id = "osiris"
+name = "OSIRIS"
+group = "Tools"
+probe = "http"
+default_port = 3008
+verify_path = "/"
+verify_contains = "OSIRIS"
+notes = "Open source intelligence dashboard. The landing page names OSIRIS."
+
+[[catalog]]
 id = "vaultwarden"
 name = "Vaultwarden"
 group = "Security"
@@ -189,5 +215,5 @@ id = "tailscale"
 name = "Tailscale"
 group = "Network"
 probe = "process"
-process_match = "tailscaled"
+process_match = "tailscale"
 notes = "Mesh VPN daemon. It listens on ephemeral ports, so it is identified by process."

@@ -92,9 +92,14 @@ pub fn probe_http(url: &str, expect_status: u16, contains: &str, timeout: f64) -
                 // The signature may live in the body OR in the final URL: a service that
                 // redirects to /dashboard identifies itself in the redirect, not the HTML.
                 let final_url = resp.get_url().to_string();
+                // The Server header counts as a signature too. A reverse proxy that redirects
+                // everything to a dashboard identifies itself only in that header — nginx on port
+                // 80 answers 301 to the status page, so neither the final URL nor the body ever
+                // says "nginx", and the service could not be recognised at all.
+                let server = resp.header("server").unwrap_or("").to_string();
                 let mut body = String::new();
                 let _ = resp.into_reader().take(200_000).read_to_string(&mut body);
-                let hay = format!("{final_url}\n{body}").to_lowercase();
+                let hay = format!("{final_url}\n{server}\n{body}").to_lowercase();
                 if !hay.contains(&contains.to_lowercase()) {
                     // `degraded`, not `down`: the service answered, but it did not prove it is the
                     // service we expected. The wording matters — "signature missing" on a healthy
