@@ -92,16 +92,33 @@ pub fn run(cfg: Config, config_path: Option<PathBuf>, tls: Option<(PathBuf, Path
         println!("  tail reports on {scheme} {}:{rp}/api/report", cfg.bind);
     }
 
-    // A tail that has just been installed does not know this address, so advertise it. Binding the
-    // discovery port is not required for serving: a failure is logged and serving continues.
+    // Only a node acting as head answers discovery. Advertising from every node meant a tail
+    // announced itself as a head, so a scan found only the machine asking.
+    //
+    // The advertised URL must also be reachable: `cfg.bind` is `0.0.0.0`, which is not an address
+    // anyone can connect to, and every node advertising `http://0.0.0.0:8770/` made them collapse
+    // into a single entry when the results were deduplicated by URL.
     {
         let name = cfg.node_name.clone();
-        let url = format!("{scheme}://{}:{}/", cfg.bind, port);
+        let advertised_host = crate::lan::reachable_host(&cfg.bind);
+        let url = format!("{scheme}://{advertised_host}:{port}/");
         let report_port = report_bound;
         let halt = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let watcher_for_lan = Arc::clone(&watcher_holder);
+        let boot_serve = cfg.serve;
+        let boot_path = config_path.as_deref().or(cfg.path.as_deref()).map(|p| p.to_path_buf());
         std::thread::spawn(move || {
             let version = env!("CARGO_PKG_VERSION").to_string();
-            crate::lan::serve_advertisement(name, url, report_port, version, halt);
+            // The predicate is what keeps this honest: the thread exists from boot, but it only
+            // answers while the node is acting as head. Spawning it conditionally meant a node
+            // that became head later never advertised until it was restarted, and one that stopped
+            // being head advertised for ever.
+            let still_head = move || match (&boot_path, watcher_for_lan.lock().unwrap().as_mut()) {
+                (_, Some(w)) => w.refresh().serve,
+                (Some(path), None) => crate::config::load(Some(path)).map(|c| c.serve).unwrap_or(boot_serve),
+                (None, None) => boot_serve,
+            };
+            crate::lan::serve_advertisement(name, url, report_port, version, halt, still_head);
         });
     }
 

@@ -83,6 +83,7 @@ pub fn serve_advertisement(
     report_port: Option<u16>,
     version: String,
     halt: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    still_head: impl Fn() -> bool + Send + 'static,
 ) {
     let sock = match UdpSocket::bind(("0.0.0.0", DISCOVERY_PORT)) {
         Ok(s) => s,
@@ -98,7 +99,10 @@ pub fn serve_advertisement(
         match sock.recv_from(&mut buf) {
             Ok((n, from)) => {
                 // Only answer the exact query, so this port is not a general-purpose echo.
-                if &buf[..n] == QUERY {
+                // The role is a live setting. A node that stops acting as head stops answering
+                // discovery, or a scan keeps finding a head that no longer collects. Checked per
+                // query, which costs nothing: queries arrive only when someone presses Scan.
+                if &buf[..n] == QUERY && still_head() {
                     let _ = sock.send_to(&answer, from);
                 }
             }
@@ -108,6 +112,34 @@ pub fn serve_advertisement(
 }
 
 /// Broadcast once and collect answers for `window`.
+/// The address to advertise: the bind address unless it is a wildcard.
+///
+/// `bind = "0.0.0.0"` means "listen everywhere" and is not an address anyone can dial. Advertising
+/// it made every node publish the same unreachable URL, and deduplicating by URL collapsed several
+/// machines into one entry. A wildcard becomes this machine's first non-loopback IPv4.
+pub fn reachable_host(bind: &str) -> String {
+    let wildcard = matches!(bind, "0.0.0.0" | "::" | "[::]" | "");
+    if !wildcard {
+        return bind.to_string();
+    }
+    let networks = sysinfo::Networks::new_with_refreshed_list();
+    for (name, data) in networks.list() {
+        if name == "lo" || name.starts_with("lo") || name.starts_with("utun") || name.starts_with("tun") {
+            continue;
+        }
+        for ip in data.ip_networks() {
+            if let std::net::IpAddr::V4(v4) = ip.addr {
+                if !v4.is_loopback() && !v4.is_link_local() {
+                    return v4.to_string();
+                }
+            }
+        }
+    }
+    // Falling back to loopback is honest: discovery still works on this machine, and the URL is
+    // reachable rather than a wildcard nobody can dial.
+    "127.0.0.1".to_string()
+}
+
 pub fn find_heads(window: Duration) -> Vec<Head> {
     let sock = match UdpSocket::bind(("0.0.0.0", 0)) {
         Ok(s) => s,

@@ -2099,7 +2099,7 @@
       const API_BASE = (window.location.pathname.replace(/\/$/, '') || '');
       // Bump on every shell change. Declared before first use: a `const` referenced above its
       // declaration throws a TDZ error and takes the whole script down (it did).
-      const BUILD = 'of-20';
+      const BUILD = 'of-21';
       // Show the address actually in use, not a baked-in host.
       (function () {
         const el = document.getElementById('brand-url');
@@ -2898,6 +2898,19 @@
         if (el) el.textContent = msg || '';
       }
 
+      // A head collects; it does not report to anyone. So while "serve the dashboard" is ticked the
+      // head address is meaningless — clear it and lock it, rather than leaving a stale address in a
+      // field that would silently do nothing.
+      function syncRoleFields() {
+        const serve = document.getElementById('set-serve');
+        const rt = document.getElementById('set-report-to');
+        if (!serve || !rt) return;
+        const isHead = serve.checked;
+        if (isHead) rt.value = '';
+        rt.disabled = isHead;
+        rt.placeholder = isHead ? 'not used while this machine is the head' : 'http://127.0.0.1:8771';
+      }
+
       async function loadSettings() {
         let d;
         try {
@@ -2922,6 +2935,7 @@
         if (serve) serve.checked = !!d.serve;
         const rt = document.getElementById('set-report-to');
         if (rt) rt.value = d.report_to || '';
+        syncRoleFields();
         const iv = document.getElementById('set-interval');
         if (iv) iv.value = d.poll_interval;
         const auto = document.getElementById('set-autostart');
@@ -3281,6 +3295,10 @@
           const el = document.getElementById(id);
           if (el) el.addEventListener('click', fn);
         };
+        // React as the box is ticked, not only after a save: the field is either meaningful or it
+        // is not, and that is already known at the moment of the click.
+        const serveBox = document.getElementById('set-serve');
+        if (serveBox) serveBox.addEventListener('change', syncRoleFields);
         on('set-save-role', () => saveSettings({
           listen: document.getElementById('set-serve').checked,
           report_to: document.getElementById('set-report-to').value.trim(),
