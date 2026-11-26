@@ -50,9 +50,9 @@ Per-user accounts. Roles. 2FA. Password recovery. One operator, one password.
 - Every `/api/*` write returns 401 without a session.
 - A call to the admin API on the report port is refused.
 - The phone loads the dashboard over HTTPS with an imported certificate.
-- The three remaining pairing tests pass: rejecting a request leaves that machine unable to report,
-  removing a paired machine makes it ask again, and a pending request survives a restart of the head.
-  (Role switching is verified. The third- and fourth-machine test belongs to 0.7.0.)
+- The pairing tests pass: a rejected request leaves that machine unable to report, a pending request
+  survives a restart of the head, and removal deletes the machine's data from the dashboard and does
+  not re-ask. (Role switching is verified. The third- and fourth-machine test belongs to 0.7.0.)
 
 ---
 
