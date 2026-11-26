@@ -15,6 +15,9 @@ pub struct Entry {
     pub default_port: u16,
     pub verify_path: String,
     pub verify_contains: String,
+    /// `http` unless the service speaks TLS on its own port. Vaultwarden and Portainer both do,
+    /// and assuming http probed them with a plain-text request that could only ever fail.
+    pub scheme: String,
     pub process_match: String,
     pub notes: String,
     /// Installed but normally not running. Still reported, still alerts on transitions, but kept
@@ -113,6 +116,11 @@ fn parse(source: &str, label: &str) -> Result<Vec<Entry>, ConfigError> {
             verify_contains,
             process_match: get("process_match"),
             notes: get("notes"),
+            scheme: r
+                .get("scheme")
+                .and_then(|v| v.as_str())
+                .unwrap_or("http")
+                .to_string(),
             expected_off: r.get("expected_off").and_then(|v| v.as_bool()).unwrap_or(false),
         });
     }
@@ -137,7 +145,11 @@ pub fn instantiate(entry: &Entry, host: &str, port: Option<u16>, instance: &str)
             Ok(Service {
                 id: sid,
                 probe: "http".into(),
-                target: format!("http://{host}:{p}{}", entry.verify_path),
+                target: format!(
+            "{}://{host}:{p}{}",
+            if entry.scheme.is_empty() { "http" } else { &entry.scheme },
+            entry.verify_path
+        ),
                 name: entry.name.clone(),
                 group: entry.group.clone(),
                 contains: entry.verify_contains.clone(),

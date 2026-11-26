@@ -217,11 +217,18 @@ pub fn add_service(path: &Path, block: &str, id: &str) -> Result<(), String> {
     // catalog's `hermes` to a dashboard already watching `hermes_api` gave two cards both labelled
     // "Hermes Agent", which is indistinguishable on screen. Refuse by name too, and say which id
     // already holds it so the answer is actionable rather than just "no".
+    //
+    // A suffixed id (`syncthing-8385`) is a deliberate second instance, so it is allowed the same
+    // name: the cards are distinguishable by the port the operator asked for, and blocking it left
+    // no way to watch two copies of anything.
     if let Some(name) = block_field(block, "name") {
         if let Some(existing) = service_with_name(&text, &name) {
-            return Err(format!(
-                "a service already shows as {name:?} (id {existing:?}); rename it or remove that one first"
-            ));
+            let is_second_instance = id.contains('-') && existing != id;
+            if !is_second_instance {
+                return Err(format!(
+                    "a service already shows as {name:?} (id {existing:?}); rename it or remove that one first"
+                ));
+            }
         }
     }
     let mut out = text.clone();
@@ -388,6 +395,20 @@ mod tests {
         assert!(err.contains("hermes_api"), "the error must name the id already using it: {err}");
         // And nothing was appended.
         assert_eq!(service_ids_in(&std::fs::read_to_string(&p).unwrap()), vec!["hermes_api"]);
+    }
+
+    #[test]
+    fn a_second_instance_is_allowed_the_same_display_name() {
+        // Two sonarrs on two ports are two services; refusing the name made the second one
+        // impossible to add at all.
+        let body = "[[service]]\nid = \"sonarr\"\nname = \"Sonarr\"\nprobe = \"tcp\"\ntarget = \"127.0.0.1:8989\"\n";
+        let (_d, p) = tmpfile(body);
+        let second = "[[service]]\nid = \"sonarr-8990\"\nname = \"Sonarr\"\nprobe = \"tcp\"\ntarget = \"127.0.0.1:8990\"\n";
+        assert!(
+            add_service(&p, second, "sonarr-8990").is_ok(),
+            "a suffixed id is a deliberate second instance"
+        );
+        assert_eq!(service_ids_in(&std::fs::read_to_string(&p).unwrap()).len(), 2);
     }
 
     #[test]

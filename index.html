@@ -2099,7 +2099,7 @@
       const API_BASE = (window.location.pathname.replace(/\/$/, '') || '');
       // Bump on every shell change. Declared before first use: a `const` referenced above its
       // declaration throws a TDZ error and takes the whole script down (it did).
-      const BUILD = 'of-19';
+      const BUILD = 'of-20';
       // Show the address actually in use, not a baked-in host.
       (function () {
         const el = document.getElementById('brand-url');
@@ -3152,9 +3152,10 @@
           // Every catalog entry, always. The picker marks the ones already monitored rather than
           // filtering them out, so the same list is both "what can I add" and "what do I run".
           const cat = await (await fetch('api/catalog', { cache: 'no-store' })).json();
+          // Alphabetical by name, not grouped: the list is long enough that finding one by
+          // scanning a group heading is slower than reading down the alphabet.
           catalogEntries = (cat.entries || []).slice()
-            .sort((a, b) => (a.group || '').localeCompare(b.group || '')
-              || (a.name || a.id).localeCompare(b.name || b.id));
+            .sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id));
           renderPickerMenu();
         } catch (_) {}
       }

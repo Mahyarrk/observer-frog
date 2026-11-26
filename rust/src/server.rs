@@ -321,6 +321,21 @@ fn node_meta(path: &std::path::Path, node_id: &str) -> (String, i64, i64) {
 }
 
 /// Every node the head knows about, for the selector.
+/// Ports already watched by services of this catalog id.
+///
+/// Used to tell a duplicate from a second instance: the same service on the same port is the
+/// mistake, the same service on another port is something the operator may legitimately want.
+fn text_block_ports(path: &std::path::Path, catalog_id: &str) -> Vec<String> {
+    let Ok(cfg) = crate::config::load(Some(path)) else { return Vec::new() };
+    let prefix = format!("{catalog_id}-");
+    cfg.services
+        .iter()
+        .filter(|s| s.id == catalog_id || s.id.starts_with(&prefix))
+        .map(|s| crate::config::port_of(&s.target))
+        .filter(|p| !p.is_empty())
+        .collect()
+}
+
 pub fn nodes_list(app: &App) -> Value {
     let now = now();
     let mut out: Vec<Value> = Vec::new();
@@ -833,7 +848,30 @@ fn route(req: &Request, app: &Arc<App>) -> (u16, String, Vec<u8>, bool) {
                         None => Err(format!("no catalog entry {cid:?}")),
                         Some(entry) => match crate::catalog::instantiate(entry, "127.0.0.1", port, instance) {
                             Err(e) => Err(e.to_string()),
-                            Ok(svc) => {
+                            Ok(mut svc) => {
+                                // A second copy of the same service is legitimate as long as it is on
+                                // a different port. Only a repeat on the very same port is the
+                                // mistake, so compare ports and suffix the id when they differ —
+                                // otherwise the operator had no way to watch two instances.
+                                let wanted = svc.ports.clone();
+                                let already: Vec<String> = text_block_ports(&path, &entry.id);
+                                if already.iter().any(|p| *p == wanted) {
+                                    return (
+                                        400,
+                                        json_ct,
+                                        json_bytes(&json!({
+                                            "ok": false,
+                                            "error": format!(
+                                                "{} is already watched on port {}; give this instance another port",
+                                                entry.name, wanted
+                                            ),
+                                        })),
+                                        false,
+                                    );
+                                }
+                                if !already.is_empty() {
+                                    svc.id = format!("{}-{}", entry.id, wanted);
+                                }
                                 // The button says "Verify and add", so verify: probe the candidate
                                 // now and refuse it if it does not answer as itself. Without this
                                 // the block was written for a port nobody was listening on, and the
