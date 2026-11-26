@@ -36,26 +36,33 @@ I would **not** take the `INITIAL_PASSWORD || "123456"` fallback. A dashboard th
 password is not authenticated, it is authenticated-looking, and that is worse than being open because
 nobody thinks to check.
 
-### Zero new dependencies
+### One new dependency: bcrypt
 
-Worth deciding deliberately, because it is achievable:
+Decided: **the `bcrypt` crate**, matching 9router. Cost factor 12. The crate is pure Rust, so it
+builds on both targets with nothing to link.
 
-- `sha2` is already a dependency. HMAC-SHA256 on top of it is about 25 lines, verified against the
-  RFC 4231 vectors.
-- PBKDF2-HMAC-SHA256 is about 15 more, and is the same primitive at 600,000 iterations.
-- The signed cookie is `<exp>.<hmac-hex>`, verified with the constant-time compare that already
-  exists in `ingest.rs`.
-- Hex encoding is a four-line function. We need no base64.
+Measured, not guessed, on the two machines that will run it:
 
-So: no `bcrypt`, no `argon2`, no `jwt`, no `rand`. Cost is roughly 300 to 500 ms per login attempt at
-600k iterations, which on a single-user dashboard happens about once a day.
+| Machine | hash (cost 12) | verify |
+|---|---|---|
+| Mac, Apple M4 | 205 ms | 333 ms |
+| Laptop, Celeron N3350 | 376 ms | 365 ms |
 
-The alternative is the `bcrypt` crate to match 9router exactly. Smaller to write, one more dependency,
-and it changes nothing the operator can see.
+Both are fine for a login that happens once a day. Cost 12 is the floor I would accept; 10 would be
+0.1 s and is not worth the trade.
 
-**Recommendation:** hand-rolled PBKDF2 on existing `sha2`. It is the same family of primitive, it is
-testable against published vectors, and it keeps the dependency list honest for a binary that
-advertises having one.
+Two consequences worth writing down before the code exists:
+
+- **bcrypt truncates at 72 bytes.** A 200-character passphrase and its first 72 characters are the
+  same password. The set-password route rejects anything over 72 bytes with a plain sentence rather
+  than silently accepting a shorter secret than the operator typed.
+- **The cost factor lives inside the hash string** (`$2b$12$...`), so raising it later needs no
+  migration: old hashes keep verifying at their own cost, and each is upgraded on next successful
+  login.
+
+The cookie still needs HMAC-SHA256, and `sha2` is already a dependency, so that is ~25 lines verified
+against the RFC 4231 vectors. The constant-time compare already in `ingest.rs` verifies it. Hex
+encoding is four lines. No base64, no JWT, no `rand`.
 
 ## Work packages
 
@@ -81,10 +88,10 @@ port is unchanged. Existing machines keep reporting.
 
 - A `settings` table (schema v10) holding `password_hash` and `password_set_ts`. Not the config file:
   a hash in `config.toml` gets copied into dotfiles repos and pasted into issues.
-- Format: `pbkdf2$<iterations>$<salt-hex>$<hash-hex>`, so the iteration count travels with the hash
-  and can be raised later without a migration.
+- Format: bcrypt's own `$2b$<cost>$<salt>$<hash>`. The cost travels inside the string, so raising it
+  later needs no migration.
 - `set_password`, `verify_password`, `password_is_set`.
-- Constant-time compare on the derived key.
+- bcrypt compares in constant time; nothing extra to write.
 
 **Acceptance:** setting a password twice replaces it. A wrong password fails. The stored value never
 appears in logs, `status` output, or `/api/settings`.
@@ -163,6 +170,18 @@ Its own inner tab, not a card inside "This Node". Three changes of state, each w
 3. **Remove it.** Current password required. Removing turns the gate off, and the tab says so in red
    before you press it, because the next visitor to that port owns the machine.
 
+Plus the one you asked for, which is the only way back in after a forgotten password:
+
+4. **Reset without the old password, from `127.0.0.1` only.** The route refuses any request whose peer
+   address is not loopback. Someone at the keyboard can recover a lost password; someone on the LAN
+   cannot. This is the correct trust boundary because it is the same one that already lets you edit
+   `config.toml` and read the token file.
+
+The reset route must take the peer address from the socket, never from a header. `X-Forwarded-For` is
+a value the client writes, so a remote attacker could otherwise claim to be local. And because a
+reverse proxy in front would make every request look loopback, the plan is: if a proxy is configured
+the operator's host is trusted anyway, and the route is still no weaker than the config file beside it.
+
 Rules: minimum 8 characters, refused with a reason rather than a red star. Changing or removing the
 password invalidates every existing session by rotating the signing secret, which is cheaper than
 tracking sessions and gets the same result.
@@ -187,27 +206,55 @@ certificate", an expired certificate refused by date, and the phone loads over H
 
 The one genuinely awkward case: a node that is reachable before a password exists. Two options.
 
-**A. Loopback-only setup.** The set-password route answers only when the peer address is loopback.
-Clean, and a headless box is set up over SSH or through a tunnel. But the first visit from a phone
-shows a dashboard that cannot be secured, which is a confusing state to explain in a red banner.
+**Chosen: a setup token.** No password means no dashboard. `/api/auth/status` reports `needs_setup`,
+and the page asks for a token printed once to stdout and to the journal at first boot. Anyone who can
+read the journal can claim the machine, which is the right trust boundary: it is the same access that
+already lets you read the token file and edit the config.
 
-**B. Setup token.** No password means no dashboard. `/api/auth/status` reports `needs_setup`, and the
-page asks for a setup token printed once to stdout and the journal at first boot. Anyone who can read
-the journal can claim the machine, which is exactly the right trust boundary.
+Details that make it work rather than annoy:
 
-**Recommendation:** B. It works from a phone, it does not depend on getting loopback right through a
-reverse proxy, and it makes the trust boundary explicit instead of implied.
+- The token is generated at first boot only, when no password exists, and shown once in the startup
+  output. It is not stored in the config.
+- It is valid until a password is set. No expiry, because a box can sit unconfigured for a week and an
+  expiring token would turn that into a lockout.
+- Setting the password clears it. The route refuses to run once a password exists, so it is not a
+  second door.
+- If the journal was rotated away before it was read, `observer-frog passwd` on the console prints a
+  fresh one. Local shell access is the same trust boundary as reading the journal. This is the
+  recovery path for the recovery path, and without it the first-run gate can strand a headless box.
 
-## Decisions I need from you
+## Decided
 
-1. **Hashing:** hand-rolled PBKDF2 on existing `sha2` (no new dependency), or the `bcrypt` crate to
-   match 9router? Same behaviour either way.
-2. **First run:** loopback-only, or a setup token? I recommend the token.
-3. **Reads gated too?** I have assumed yes: `/api/status` and `/api/history` need a session, because
-   service names and machine names are the thing an attacker wants. Say if you would rather the
-   dashboard be readable and only writes gated.
-4. **Remove-password:** allowed at all, or always required once set? Allowed is friendlier and
-   indistinguishable in risk from never having set one.
+1. **Hashing:** bcrypt, cost 12. Matches 9router, and the cost travels inside the hash.
+2. **First run:** a setup token printed to the journal, cleared when a password is set.
+3. **Reads gated:** `/api/status`, `/api/history` and `/api/nodes` need a session. Service names and
+   machine names are exactly what an attacker wants, and a dashboard readable without the password is
+   not protected.
+4. **Remove-password:** allowed, current password required, with the consequence stated in red.
+5. **Reset:** without the old password, from `127.0.0.1` only, peer address taken from the socket.
+
+## Which machine this matters on
+
+The intended topology is **the laptop as head and the Mac as tail**, which is the reverse of how the
+two are configured right now. Two consequences for this plan:
+
+- The password, the session secret and the sign-in gate all live on the **laptop**: a Celeron N3350
+  with 4 GB. That is the machine that will run bcrypt, the one that serves the phone, and the one
+  whose journal holds the setup token. The 376 ms figure above is the one that counts.
+- Loopback-only reset means on the laptop's own keyboard, not the Mac's. Fine, but it rules out
+  "reset it from the Mac" as a shortcut, and that should be said in the settings text so nobody goes
+  looking for it.
+
+This also means the test plan changes: every acceptance check in WP1 to WP7 has to be run with the
+laptop serving, which is not the current setup. Flipping the two roles is a prerequisite, not part of
+the work.
+
+Still open, and only decidable once it is running:
+
+- Whether the setup token should also be accepted from loopback before it is read out of the journal.
+  It probably should, since the two are the same trust boundary, but that is a second path to test.
+- Whether the login view should replace the shell or sit over it. Replacing it is simpler and leaves
+  nothing cached to leak; overlaying it keeps the app feeling instant on a slow phone.
 
 ## Order and rough shape
 
