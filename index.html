@@ -2540,7 +2540,7 @@
       const API_BASE = (window.location.pathname.replace(/\/$/, '') || '');
       // Bump on every shell change. Declared before first use: a `const` referenced above its
       // declaration throws a TDZ error and takes the whole script down (it did).
-      const BUILD = 'of-55';
+      const BUILD = 'of-57';
       // Show the address actually in use, not a baked-in host.
       (function () {
         const el = document.getElementById('brand-url');
@@ -3559,9 +3559,16 @@
           auto.checked = !!d.autostart;
           auto.disabled = !d.autostart_supported;
         }
-        // The one place this version can genuinely bite: no auth on a LAN address.
+        // Only warn when there is something to warn about. A LAN bind stopped being the risk in
+        // 0.5.0, when operator sign-in landed; what remains is a LAN bind *without* a certificate,
+        // because then the password crosses the network in the clear. With TLS on, say nothing:
+        // a warning that is always red is a warning nobody reads.
         const warn = document.getElementById('settings-warning');
-        if (warn) warn.hidden = !(d.bind && !/^(127\.|localhost|::1)/.test(d.bind));
+        if (warn) {
+          const onLan = !!(d.bind && !/^(127\.|localhost|::1)/.test(d.bind));
+          const noTls = !d.tls_cert;
+          warn.hidden = !(onLan && noTls);
+        }
         const hint = document.getElementById('set-autostart-hint');
         if (hint && !d.autostart_supported) {
           hint.textContent = 'Autostart is implemented on macOS and Linux only.';
@@ -3838,6 +3845,8 @@
           hint: 'Any URL that accepts a JSON POST. The body carries the title, the message, the priority and the head name.' },
       ];
       let notifyBuilt = false;
+      // A save rebuilds the cards, so a note written before the rebuild has to survive it.
+      let pendingNote = null;
 
       function routeCard(route, cfg) {
         const id = 'route-' + route.kind;
@@ -3918,10 +3927,21 @@
         host.innerHTML = ROUTES.map((r) => routeCard(r, sinks.find((s) => s.kind === r.kind))).join('');
         notifyBuilt = true;
         for (const route of ROUTES) wireRoute(route);
+        if (pendingNote) {
+          const el = document.getElementById('route-' + pendingNote.kind + '-note');
+          if (el) el.textContent = pendingNote.text;
+          pendingNote = null;
+        }
       }
 
       function wireRoute(route) {
         const id = 'route-' + route.kind;
+        // Local, not the one inside initSettings: that helper is scoped there and this function runs
+        // at module level. Sharing it was the bug that made every route card inert.
+        const bind = (elId, fn) => {
+          const el = document.getElementById(elId);
+          if (el) el.addEventListener('click', fn);
+        };
         const note = (msg, bad) => {
           const el = document.getElementById(id + '-note');
           if (!el) return;
@@ -3931,7 +3951,7 @@
         const val = (suffix) => (document.getElementById(id + '-' + suffix) || {}).value || '';
         const tick = (suffix) => !!(document.getElementById(id + '-' + suffix) || {}).checked;
 
-        on(id + '-enabled', async () => {
+        bind(id + '-enabled', async () => {
           const on_ = tick('enabled');
           // Greyed, not deleted: unticking keeps every field so switching back on needs no retyping.
           const body = document.getElementById(id + '-body');
@@ -3942,9 +3962,9 @@
           await saveRoute(route, note);
         });
 
-        on(id + '-save', () => saveRoute(route, note));
+        bind(id + '-save', () => saveRoute(route, note));
 
-        on(id + '-test', async () => {
+        bind(id + '-test', async () => {
           if (!tick('enabled')) { note('that route is switched off', true); return; }
           const btn = document.getElementById(id + '-test');
           if (btn) btn.disabled = true;
@@ -3961,7 +3981,7 @@
           finally { if (btn) btn.disabled = false; }
         });
 
-        on(id + '-clear', async () => {
+        bind(id + '-clear', async () => {
           const btn = document.getElementById(id + '-clear');
           if (btn && btn.dataset.armed !== '1') {
             btn.dataset.armed = '1';
@@ -3993,7 +4013,10 @@
           });
           const d = await r.json().catch(() => ({}));
           if (!r.ok || d.ok === false) { note(d.error || 'could not save that route', true); return; }
-          note(clear ? 'route removed' : (tick('enabled') ? 'saved' : 'saved and switched off'));
+          const msg = clear ? 'route removed' : (tick('enabled') ? 'saved' : 'saved and switched off');
+          // The rebuild below replaces this card, taking the note with it. Carry the message across
+          // so the button reports what happened instead of appearing to do nothing.
+          pendingNote = { kind: route.kind, text: msg };
           await buildRoutes(true);
         } catch (e) { note('failed: ' + e, true); }
       }

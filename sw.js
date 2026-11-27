@@ -2,7 +2,7 @@
 // Invariants (F10, F16): network-first shell, network-ONLY /api/*, every caches.match awaited,
 // versioned cache name with old caches deleted on activate.
 // Paths are relative so the app works at / and behind a /status/ prefix alike.
-const CACHE_NAME = 'observer-frog-shell-v55';
+const CACHE_NAME = 'observer-frog-shell-v57';
 const SHELL = ['./', './index.html'];
 
 self.addEventListener('install', (event) => {
