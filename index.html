@@ -2275,7 +2275,6 @@
               <input type="password" id="pw-new2" autocomplete="new-password" />
             </label>
             <button class="settings-btn" id="pw-save" type="button">Change password</button>
-            <p class="settings-note" id="pw-note"></p>
             <h3 class="pair-subtitle">Every other device</h3>
             <p class="settings-hint">
               Signs out everything except this browser. Use it if a phone is lost.
@@ -2283,6 +2282,7 @@
             <button class="settings-btn" id="pw-logout-all" type="button">Sign out other devices</button>
             <h3 class="pair-subtitle">Sign out</h3>
             <button class="settings-btn" id="pw-logout" type="button">Sign out of this browser</button>
+            <p class="settings-note" id="pw-note"></p>
             <h3 class="pair-subtitle">Remove the password</h3>
             <p class="settings-hint" style="color: var(--down-color);">
               This opens the dashboard to anyone who can reach this port, with no sign-in at all.
@@ -2428,7 +2428,7 @@
       const API_BASE = (window.location.pathname.replace(/\/$/, '') || '');
       // Bump on every shell change. Declared before first use: a `const` referenced above its
       // declaration throws a TDZ error and takes the whole script down (it did).
-      const BUILD = 'of-39';
+      const BUILD = 'of-41';
       // Show the address actually in use, not a baked-in host.
       (function () {
         const el = document.getElementById('brand-url');
@@ -3843,9 +3843,13 @@
         });
 
       // ---- Access tab: password management --------------------------------
-      function pwNote(msg, bad) {
+      // `after` names the button the message belongs to, so the note sits beneath that button
+      // instead of above a block it is not describing.
+      function pwNote(msg, bad, after) {
         const el = document.getElementById('pw-note');
         if (!el) return;
+        const anchor = after && document.getElementById(after);
+        if (anchor && anchor.nextElementSibling !== el) anchor.after(el);
         el.textContent = msg || '';
         el.style.color = bad ? 'var(--down-color)' : '';
       }
@@ -3945,13 +3949,13 @@
       on('pw-save', async () => {
         const a = val('pw-new');
         const b = val('pw-new2');
-        if (a !== b) { pwNote('the two new passwords do not match', true); return; }
+        if (a !== b) { pwNote('the two new passwords do not match', true, 'pw-save'); return; }
         const res = await postPassword({ action: 'change', current: val('pw-current'), password: a });
         if (res.ok) {
           ['pw-current', 'pw-new', 'pw-new2'].forEach(clear);
-          pwNote('password changed. other devices are signed out; this one stays in.');
+          pwNote('password changed. other devices are signed out; this one stays in.', false, 'pw-save');
         } else {
-          pwNote(res.d.error || 'could not change it', true);
+          pwNote(res.d.error || 'could not change it', true, 'pw-save');
         }
       });
 
@@ -3959,8 +3963,8 @@
         try {
           const r = await fetch('api/auth/logout-all', { method: 'POST' });
           const d = await r.json().catch(() => ({}));
-          pwNote(r.ok && d.ok ? (d.detail || 'other devices signed out') : (d.error || 'failed'), !r.ok);
-        } catch (e) { pwNote('failed: ' + e, true); }
+          pwNote(r.ok && d.ok ? (d.detail || 'other devices signed out') : (d.error || 'failed'), !r.ok, 'pw-logout-all');
+        } catch (e) { pwNote('failed: ' + e, true, 'pw-logout-all'); }
       });
 
       on('pw-logout', async () => {
@@ -3975,12 +3979,13 @@
         const el = document.getElementById('pw-remove-note');
         if (res.ok) {
           clear('pw-current');
-          if (el) el.textContent = res.d.warning || 'password removed';
+          if (el) { el.style.color = 'var(--down-color)'; el.textContent = res.d.warning || 'password removed'; }
           currentData = SEED_DATA;
           if (tickTimer) { clearInterval(tickTimer); tickTimer = null; }
           await checkAuth();
           await boot();
         } else if (el) {
+          el.style.color = 'var(--down-color)';
           el.textContent = res.d.error || 'could not remove it';
         }
       });
