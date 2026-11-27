@@ -399,9 +399,9 @@ pub fn probe_file_json(path: &str, field: &str, contains: &str) -> Triple {
 /// Run one configured Service and return its triple.
 /// Is a network interface present and up?
 ///
-/// WireGuard's userspace daemon runs on every platform, but Linux and Windows usually run the kernel
-/// driver, which has no process of its own: `wg0` is the only evidence. Asking the interface table is
-/// how that case is answered, and a service may name an interface so that either signal counts.
+/// WireGuard is two implementations, not one: Linux and Windows load the kernel driver, which has no
+/// process of its own so `wg0` is the only evidence, while macOS runs the `wireguard-go` daemon. A
+/// service may name an interface so that whichever implementation is present can be seen.
 pub fn probe_iface(name: &str) -> Triple {
     let t0 = Instant::now();
     let ms = || t0.elapsed().as_millis() as i64;

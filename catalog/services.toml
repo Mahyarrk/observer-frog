@@ -209,7 +209,7 @@ group = "Network"
 probe = "process"
 process_match = "wireguard-go"
 iface = "wg0"
-notes = "The Go userspace daemon runs on every platform; Linux and Windows usually use the kernel driver instead, which has no process of its own, only the interface. Found by either."
+notes = "Two different implementations, not one. Linux and Windows run the kernel driver: no process, only the wg0 interface. macOS runs the wireguard-go userspace daemon, which appears as `wireguard-go utun`. Either signal alone therefore misses one platform, which is why both are named."
 
 [[catalog]]
 id = "tailscale"

@@ -62,11 +62,11 @@ pub struct Service {
     pub ports: String,
     /// A network interface that also proves this service is up.
     ///
-    /// WireGuard is the case this exists for. Its userspace daemon, `wireguard-go`, runs on every
-    /// platform, so on Linux it *is* findable as a process. What Linux usually runs instead is the
-    /// kernel driver, which has no process at all and only an interface. So neither signal alone is
-    /// enough: a process probe finds the daemon where it is used and misses the driver everywhere
-    /// it is used, which is most Linux installs. Naming both means up is "either one answered".
+    /// WireGuard is the case this exists for, and it is genuinely two implementations rather than
+    /// one program on two platforms. Linux and Windows load the kernel driver: there is no process
+    /// at all, only `wg0`. macOS runs the `wireguard-go` userspace daemon, whose command line reads
+    /// `wireguard-go utun`. Neither signal alone can see both, so a service may name either and up
+    /// means "one of them answered".
     pub iface: String,
 }
 
