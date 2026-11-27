@@ -141,11 +141,15 @@ pub fn run(cfg: Config, config_path: Option<PathBuf>, tls: Option<(PathBuf, Path
 
     let sweeper_halt = p.halt_flag();
     let asked_to_pair: Arc<Mutex<bool>> = Arc::new(Mutex::new(false));
+    // Remembered from the last discovery answer: the port the head's dashboard listens on. Pairing
+    // has to reach that listener, and the report address this machine holds does not name it.
+    let known_dashboard_port: Arc<Mutex<Option<u16>>> = Arc::new(Mutex::new(None));
     {
         let app = Arc::clone(&app);
         let watcher_holder = Arc::clone(&watcher_holder);
         let halt = p.halt_flag();
         let asked_to_pair = Arc::clone(&asked_to_pair);
+        let known_dashboard_port = Arc::clone(&known_dashboard_port);
         std::thread::spawn(move || {
             while !halt.load(Ordering::SeqCst) {
                 let cfg_now = {
@@ -206,13 +210,21 @@ pub fn run(cfg: Config, config_path: Option<PathBuf>, tls: Option<(PathBuf, Path
                                     // person still has to click approve either way.
                                     if e.contains("unknown token") && !*asked_to_pair.lock().unwrap() {
                                         *asked_to_pair.lock().unwrap() = true;
-                                        let ask = cfg_now.token().map(|t| {
-                                            crate::pair::ask_head(&head, &cfg_now.node_id, &crate::config::hostname(), &t, cfg_now.poll_interval as i64)
-                                        });
+                                        // Ask the dashboard, not the report port we just failed on:
+                                        // `head` is the report address and answers only
+                                        // /api/report. The advertised dashboard port is remembered
+                                        // per head; without one, the default is assumed.
+                                        let target = crate::pair::dashboard_of(&head, *known_dashboard_port.lock().unwrap());
+                                        let ask: Result<String, String> = match target {
+                                            Some(t) => match cfg_now.token() {
+                                                Ok(tok) => crate::pair::ask_head(&t, &cfg_now.node_id, &crate::config::hostname(), &tok, cfg_now.poll_interval as i64),
+                                                Err(why) => Err(why),
+                                            },
+                                            None => Err("the head address is not a usable url".to_string()),
+                                        };
                                         match ask {
-                                            Ok(Ok(msg)) => log_line(&format!("pairing: {msg}")),
-                                            Ok(Err(why)) => log_line(&format!("pairing request failed: {why}")),
-                                            Err(why) => log_line(&format!("cannot ask to pair: {why}")),
+                                            Ok(msg) => log_line(&format!("pairing: {msg}")),
+                                            Err(why) => log_line(&format!("pairing request failed: {why}")),
                                         }
                                     }
                                 }

@@ -28,6 +28,10 @@ pub struct Head {
     pub report_port: Option<u16>,
     pub version: String,
     pub from: SocketAddr,
+    /// Whether the dashboard listener speaks TLS. Taken from the advertisement, never assumed.
+    pub dashboard_tls: bool,
+    /// The dashboard listener's port, as advertised.
+    pub dashboard_port: Option<u16>,
 }
 
 impl Head {
@@ -38,6 +42,8 @@ impl Head {
             "report_port": self.report_port,
             "version": self.version,
             "from": self.from.to_string(),
+            "dashboard_tls": self.dashboard_tls,
+            "dashboard_port": self.dashboard_port,
         })
     }
 }
@@ -45,11 +51,21 @@ impl Head {
 /// What the head sends back. Built by the same code that serves the dashboard, so the URL it
 /// advertises is the one it is actually reachable on.
 pub fn advertisement(name: &str, url: &str, report_port: Option<u16>, version: &str) -> Vec<u8> {
+    // `dashboard_tls` and `dashboard_port` exist so a tail never has to guess a scheme. Pairing goes
+    // to the dashboard listener, not the report listener: the report port answers only /api/report,
+    // so a request to pair sent there gets a 404 that reads like a broken head.
+    let tls = url.starts_with("https://");
+    let port = url
+        .rsplit(':')
+        .next()
+        .and_then(|p| p.trim_end_matches('/').parse::<u16>().ok());
     json!({
         "observer_frog": "head",
         "name": name,
         "url": url,
         "report_port": report_port,
+        "dashboard_tls": tls,
+        "dashboard_port": port,
         "version": version,
     })
     .to_string()
@@ -92,11 +108,30 @@ pub fn parse_head(body: &[u8], from: SocketAddr) -> Option<Head> {
         return None;
     }
     let url = v.get("url").and_then(|x| x.as_str()).unwrap_or("").to_string();
+    let reachable_url = reachable(url.clone(), from);
+    // Prefer what the head said. An older head sends neither field, so read them off the URL
+    // instead of assuming a scheme: a head with a certificate must not be contacted over http.
+    let dashboard_tls = v
+        .get("dashboard_tls")
+        .and_then(|x| x.as_bool())
+        .unwrap_or_else(|| url.starts_with("https://"));
+    let dashboard_port = v
+        .get("dashboard_port")
+        .and_then(|x| x.as_u64())
+        .map(|p| p as u16)
+        .or_else(|| {
+            reachable_url
+                .rsplit(':')
+                .next()
+                .and_then(|p| p.trim_end_matches('/').parse::<u16>().ok())
+        });
     Some(Head {
         name: v.get("name").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-        url: reachable(url, from),
+        url: reachable_url,
         report_port: v.get("report_port").and_then(|x| x.as_u64()).map(|p| p as u16),
         version: v.get("version").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+        dashboard_tls,
+        dashboard_port,
         from,
     })
 }

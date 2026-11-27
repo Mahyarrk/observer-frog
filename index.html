@@ -2431,7 +2431,7 @@
       const API_BASE = (window.location.pathname.replace(/\/$/, '') || '');
       // Bump on every shell change. Declared before first use: a `const` referenced above its
       // declaration throws a TDZ error and takes the whole script down (it did).
-      const BUILD = 'of-43';
+      const BUILD = 'of-44';
       // Show the address actually in use, not a baked-in host.
       (function () {
         const el = document.getElementById('brand-url');
@@ -4100,11 +4100,13 @@
                 btn.disabled = true;
                 btn.textContent = 'pairing…';
                 try {
-                  // The head answers on its dashboard port; requests arrive on the report port.
-                  const askUrl = h.url.replace(/:\d+\/?$/, '') + ':' + (h.report_port || '');
+                  // Pairing goes to the dashboard listener, exactly as advertised. The report
+                  // port answers only /api/report, so a request sent there gets a 404 that looks
+                  // like a broken head. The scheme comes from the advertisement too: a head with
+                  // a certificate says https, and a tail must not assume otherwise.
                   const r = await fetch('api/pair/ask', {
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ url: h.report_port ? askUrl : h.url }),
+                    body: JSON.stringify({ url: h.url }),
                   });
                   const d = await r.json();
                   btn.textContent = d.ok ? 'requested ✓' : 'failed ✕';

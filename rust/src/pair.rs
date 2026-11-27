@@ -183,6 +183,34 @@ pub fn reject(db_path: &Path, id: i64) -> Result<String, String> {
     Ok(format!("{node_id} rejected"))
 }
 
+/// The dashboard address for a head this machine reports to.
+///
+/// A tail only ever learns the *report* address from its own configuration, but pairing lives on
+/// the dashboard listener: the report port answers only /api/report, so a request sent there gets
+/// a 404 that reads like a broken head. The scheme is kept as given, because whether the dashboard
+/// speaks TLS is the head's choice and the tail must follow it rather than assume.
+pub fn dashboard_of(report_to: &str, dashboard_port: Option<u16>) -> Option<String> {
+    let url = report_to.trim().trim_end_matches('/');
+    if url.is_empty() {
+        return None;
+    }
+    let (scheme, rest) = if let Some(r) = url.strip_prefix("https://") {
+        ("https", r)
+    } else if let Some(r) = url.strip_prefix("http://") {
+        ("http", r)
+    } else {
+        return None;
+    };
+    // Strip whatever port the report address carried, then apply the dashboard port.
+    let host = match rest.rfind(':') {
+        Some(i) if rest[i + 1..].chars().all(|c| c.is_ascii_digit()) => &rest[..i],
+        _ => rest,
+    };
+    // The scheme is the head's, taken from what it advertised. Only the port falls back.
+    let port = dashboard_port.unwrap_or(8770);
+    Some(format!("{scheme}://{host}:{port}"))
+}
+
 /// Ask a head to pair with this machine.
 ///
 /// The token goes out with the request because the tail owns it: the head stores a digest of what it
@@ -221,6 +249,42 @@ pub fn ask_head(head_url: &str, node_id: &str, name: &str, token: &str, interval
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pairing_addresses_the_dashboard_not_the_report_port() {
+        // The bug this pins: a tail holds only its report address, and sending a pairing request
+        // there returns 404 from the report listener, which reads like a broken head.
+        assert_eq!(
+            dashboard_of("http://192.168.2.105:8771", Some(8770)).as_deref(),
+            Some("http://192.168.2.105:8770")
+        );
+        // A head with a certificate must be reached over https, and the tail learns that from the
+        // advertisement rather than assuming.
+        assert_eq!(
+            dashboard_of("http://192.168.2.105:8771", Some(8770)).map(|u| u.starts_with("http://")),
+            Some(true)
+        );
+        assert_eq!(
+            dashboard_of("https://192.168.2.105:8771", Some(8770)).as_deref(),
+            Some("https://192.168.2.105:8770")
+        );
+        // No advertised port: fall back to the default dashboard port, keeping the scheme.
+        assert_eq!(
+            dashboard_of("http://head:8771", None).as_deref(),
+            Some("http://head:8770")
+        );
+        assert_eq!(
+            dashboard_of("https://head:8771", None).as_deref(),
+            Some("https://head:8770")
+        );
+        // Trailing slash and nothing usable.
+        assert_eq!(
+            dashboard_of("http://head:8771/", Some(8770)).as_deref(),
+            Some("http://head:8770")
+        );
+        assert_eq!(dashboard_of("", Some(8770)), None);
+        assert_eq!(dashboard_of("head:8771", Some(8770)), None);
+    }
 
     fn fresh(name: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("of-pair-{}-{name}", std::process::id()));
