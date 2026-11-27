@@ -60,19 +60,26 @@ pub fn run(mut cfg: Config, config_path: Option<PathBuf>, tls: Option<(PathBuf, 
     // is skipped (I3) it never sent a report, so it could not even reach the 401 that starts
     // pairing. A fresh machine therefore had no way to enrol itself, which is the exact case a tail
     // on a new box is. Doing it here covers every path that serves.
-    if cfg.discover && cfg.services.is_empty() {
+    // Merged, not replaced: a config may hold services the catalog cannot describe — a file-age
+    // heartbeat, a private script — and the earlier `services.is_empty()` gate meant adding one
+    // switched discovery off entirely. Explicit entries win on id, so a port chosen by hand is not
+    // overwritten by the catalog default.
+    if cfg.discover {
         match crate::catalog::load(None) {
             Ok(entries) => {
                 let found = crate::discover::discover(&entries, "127.0.0.1");
-                if found.is_empty() {
-                    eprintln!("  discovered nothing; no catalog service is listening here");
-                } else {
-                    eprintln!("  discovered {} service(s) on this machine:", found.len());
-                    for s in &found {
-                        eprintln!("    {:<16} {}", s.id, s.target);
+                let mut added = 0;
+                for svc in found {
+                    if cfg.services.iter().any(|s| s.id == svc.id) {
+                        continue;
                     }
+                    eprintln!("    discovered {:<16} {}", svc.id, svc.target);
+                    cfg.services.push(svc);
+                    added += 1;
                 }
-                cfg.services = found;
+                if added > 0 {
+                    eprintln!("  discovered {added} service(s) on this machine");
+                }
             }
             Err(e) => eprintln!("  cannot load the catalog, no discovery: {e}"),
         }

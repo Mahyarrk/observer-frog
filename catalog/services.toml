@@ -110,7 +110,7 @@ name = "Sunshine"
 group = "Streaming"
 probe = "tcp"
 default_port = 47990
-notes = "Game-streaming host (Moonlight). 47984/47989/47990 + 48010; 47990 is the HTTPS web UI."
+notes = "Game-streaming host (Moonlight). 47984/47989/47990 + 48010; 47990 is the HTTPS web UI. Up means the web UI answered: on a headless Linux box with no X or Wayland it still binds 47990 while being unable to capture a desktop, so up is not proof that streaming works."
 
 [[catalog]]
 id = "docker"
