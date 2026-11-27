@@ -409,7 +409,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn alert_routes_travel_to_a_tail_and_carry_no_secrets() {
         let dir = std::env::temp_dir().join(format!("of-alerts-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);

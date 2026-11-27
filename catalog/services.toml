@@ -35,6 +35,18 @@ verify_contains = "displayVersion"
 notes = "Nous Research Hermes Agent. /api/health returns {ok, version, displayVersion, commit}."
 
 [[catalog]]
+id = "hermes-desktop"
+name = "Hermes Desktop"
+group = "Agents"
+probe = "process"
+# The Electron shell's own executable, not the agents it runs. Matching the bare word "hermes"
+# caught eleven processes on one machine — the Python toolchain, the osascript bridge, the backend
+# — any one of which would make the card read up while the window was closed. This path fragment
+# matches exactly the bundle's main binary.
+process_match = "Hermes.app/Contents/MacOS/Hermes"
+notes = "The desktop app. Matched by its bundle path, because the plain name also matches the agent backend and the Python tooling it spawns. Windows and Linux builds use a different executable name and would need their own entry."
+
+[[catalog]]
 id = "syncthing"
 name = "Syncthing"
 group = "Sync"
