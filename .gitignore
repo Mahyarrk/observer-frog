@@ -15,6 +15,21 @@ certs/
 *.srl
 *.p12
 *.pfx
+*.jks
+*.der
+*.cer
+*.p8
+*.pkcs8
+*.ovpn
+# What the TLS uploader writes into the data directory, and its in-flight temp names
+tls-cert.pem
+tls-key.pem
+.tls-cert-*
+.tls-key-*
+# Session signing key and the first-run artefact
+session.key
+setup-token
+*.token
 
 # Real configuration: your topology, ports and token references
 config.toml
