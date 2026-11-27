@@ -591,6 +591,8 @@
       letter-spacing: .02em; color: var(--fg-base, inherit);
     }
     .settings-hint { font-size: 12px; opacity: .72; margin: 0; line-height: 1.5; }
+    /* A scheme inside a sentence has to be readable at 12px on a phone. */
+    .settings-hint code { font-size: 11px; opacity: .9; }
     .settings-note { font-size: 12px; opacity: .8; margin: 4px 0 0; }
     /* Pairing: a request is a decision, so the two actions read as yes and no, not as buttons. */
     .pair-list { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
@@ -2307,6 +2309,13 @@
               them anywhere the service can already read. A certificate is opened when the listener
               binds, so this takes effect after a restart.
             </p>
+            <p class="settings-hint" style="color: var(--down-color);">
+              After the restart this port speaks HTTPS only. Plain <code>http://</code> to the
+              dashboard port stops working: the browser will say the connection was reset or the
+              server sent gibberish, and neither is a fault. Use <code>https://</code> from then on,
+              and update any bookmark or home screen shortcut that still says <code>http://</code>.
+              The report port is unaffected and stays plain HTTP.
+            </p>
             <p class="settings-hint" id="tls-current"></p>
           </div>
         </div>
@@ -2422,7 +2431,7 @@
       const API_BASE = (window.location.pathname.replace(/\/$/, '') || '');
       // Bump on every shell change. Declared before first use: a `const` referenced above its
       // declaration throws a TDZ error and takes the whole script down (it did).
-      const BUILD = 'of-42';
+      const BUILD = 'of-43';
       // Show the address actually in use, not a baked-in host.
       (function () {
         const el = document.getElementById('brand-url');
