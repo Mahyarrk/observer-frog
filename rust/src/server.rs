@@ -347,6 +347,18 @@ fn text_block_ports(path: &std::path::Path, catalog_id: &str) -> Vec<String> {
         .collect()
 }
 
+/// The platform a node reported about itself, read from the metrics it sends. `None` when it has
+/// not reported yet, which the UI renders as no mark rather than guessing.
+fn node_kind(db: &std::path::Path, node_id: &str) -> Option<String> {
+    let conn = db::connect(db).ok()?;
+    let mut stmt = conn
+        .prepare("SELECT metrics_json FROM nodes WHERE node_id = ?1")
+        .ok()?;
+    let json: String = stmt.query_row([node_id], |r| r.get(0)).ok()?;
+    let v: Value = serde_json::from_str(&json).ok()?;
+    v.get("kind").and_then(|k| k.as_str()).map(|s| s.to_string())
+}
+
 pub fn nodes_list(app: &App) -> Value {
     let now = now();
     let mut out: Vec<Value> = Vec::new();
@@ -358,6 +370,7 @@ pub fn nodes_list(app: &App) -> Value {
         "last_seen_ts": now,
         "local": true,
         "silent": false,
+        "kind": crate::metrics::kind(),
     }));
     if let Ok(conn) = db::connect(&app.cfg.db_path) {
         if let Ok(mut stmt) = conn.prepare(
@@ -399,7 +412,10 @@ pub fn nodes_list(app: &App) -> Value {
                         "last_seen_ts": last_seen,
                         "local": false,
                         "silent": silent,
-                    }));
+                        // The kind a machine reported about itself, so the dropdown can show the
+                        // right platform mark. Absent for a node that has not reported metrics yet.
+                        "kind": node_kind(&app.cfg.db_path, &id),
+                        }));
                 }
             }
         }

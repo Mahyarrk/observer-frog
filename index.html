@@ -459,7 +459,9 @@
       padding: 6px 10px;
       min-width: 0;
       flex: 0 1 auto;
-      overflow: hidden;
+      /* Not `overflow: hidden`: it kept a long node name from stretching the bar, but it also clipped
+         the picker's menu, so the dropdown looked like a dead button. Ellipsis on the label does the
+         same job without swallowing the menu. */
       border: 1px solid var(--border, #1e293b);
       border-radius: 12px;
       background: var(--card, rgba(15, 23, 42, 0.6));
@@ -471,6 +473,20 @@
       color: var(--muted-foreground, #64748b);
       text-transform: uppercase;
     }
+    .node-picker { flex: 1; min-width: 0; }
+    .node-picker .svc-picker-current > span:last-child {
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .node-picker .svc-picker-btn {
+      padding: 0; background: transparent; border: 0; gap: 6px;
+      font-size: 12px; min-height: 0;
+    }
+    .node-picker .svc-picker-btn:hover { background: transparent; border-color: transparent; }
+    .node-picker .svc-picker-menu { min-width: 200px; }
+    .node-picker .svc-picker-ico { width: 14px; }
+    /* Every platform mark is monochrome: it inherits the text colour rather than carrying a brand
+       colour, so the dropdown reads as one control and not as three logos. */
+    .node-picker .svc-picker-ico svg, .svc-opt-ico svg { display: block; }
     .node-select {
       flex: 1;
       min-width: 0;
@@ -552,10 +568,33 @@
       background: rgba(15, 23, 42, 0.85);
       border: 1px solid rgba(148, 163, 184, 0.18);
       margin-bottom: 0.75rem;
+      /* Five labels do not fit a phone. Scroll them rather than shrinking each one until a
+         label wraps onto two lines and the last tab is clipped off the edge. */
+      overflow-x: auto;
+      overflow-y: hidden;
+      scrollbar-width: none;
+      -webkit-overflow-scrolling: touch;
+    }
+    .settings-subnav::-webkit-scrollbar { display: none; }
+    /* Mask only the edge that actually has more content, so a strip that fits is untouched. */
+    .settings-subnav.can-scroll-right {
+      -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent 100%);
+      mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent 100%);
+    }
+    .settings-subnav.can-scroll-left {
+      -webkit-mask-image: linear-gradient(to right, transparent 0, #000 28px);
+      mask-image: linear-gradient(to right, transparent 0, #000 28px);
+    }
+    .settings-subnav.can-scroll-left.can-scroll-right {
+      -webkit-mask-image: linear-gradient(to right, transparent 0, #000 28px, #000 calc(100% - 28px), transparent 100%);
+      mask-image: linear-gradient(to right, transparent 0, #000 28px, #000 calc(100% - 28px), transparent 100%);
     }
 
     .settings-subtab {
-      flex: 1;
+      /* Not `flex: 1`: equal shares force a wrap and clip the last tab. Each label is as wide as its
+         text and the strip scrolls. */
+      flex: 0 0 auto;
+      white-space: nowrap;
       min-height: 38px;
       padding: 0.4rem 0.5rem;
       border: none;
@@ -2067,8 +2106,18 @@
       <!-- Row 3: Node and scope -->
       <div class="header-sub-row">
         <div class="node-bar" id="node-bar" hidden>
-          <label class="node-bar-label" for="node-select">NODE</label>
-          <select id="node-select" class="node-select"></select>
+          <label class="node-bar-label">NODE</label>
+          <div class="svc-picker node-picker" id="node-picker">
+            <button class="svc-picker-btn" id="node-picker-btn" type="button"
+                    aria-haspopup="listbox" aria-expanded="false">
+              <span class="svc-picker-current">
+                <span class="svc-picker-ico" id="node-picker-ico"></span>
+                <span id="node-picker-label">—</span>
+              </span>
+              <span class="svc-picker-caret">▾</span>
+            </button>
+            <div class="svc-picker-menu" id="node-picker-menu" role="listbox" hidden></div>
+          </div>
           <button class="node-edit" id="node-edit" type="button" title="Rename this node"
                   aria-label="Rename this node">&#9998;</button>
           <span class="node-bar-state" id="node-bar-state"></span>
@@ -2154,8 +2203,9 @@
     <section id="view-settings" class="view-hidden">
       <div class="settings-wrap">
         <p class="settings-warning" id="settings-warning" hidden>
-          This node is bound to a LAN address. Anyone who can reach it can reconfigure it —
-          there is no authentication in this version.
+          This node is reachable from your network. Everything that changes a setting needs the
+          operator password; without a certificate, though, that password crosses the LAN in the
+          clear. Upload one on the Access tab.
         </p>
 
         <div class="settings-subnav" role="tablist">
@@ -2453,7 +2503,7 @@
       const API_BASE = (window.location.pathname.replace(/\/$/, '') || '');
       // Bump on every shell change. Declared before first use: a `const` referenced above its
       // declaration throws a TDZ error and takes the whole script down (it did).
-      const BUILD = 'of-47';
+      const BUILD = 'of-50';
       // Show the address actually in use, not a baked-in host.
       (function () {
         const el = document.getElementById('brand-url');
@@ -2473,7 +2523,6 @@
         return API_BASE + path + q;
       }
       const nodeBar = document.getElementById('node-bar');
-      const nodeSelect = document.getElementById('node-select');
       const nodeBarState = document.getElementById('node-bar-state');
       const nodeEdit = document.getElementById('node-edit');
       let API_ENDPOINT = API_BASE + '/api/status';
@@ -3737,6 +3786,14 @@
       // One template, two routes. The fields differ by one (ntfy has a topic, a webhook does not);
       // everything else, including the proxy default and the test button, is identical, because a
       // second shape of settings does not earn its place.
+      // Platform marks, monochrome by rule: one path, `currentColor`, no brand colours. Three shapes
+      // only, because a dropdown row is 14px tall and detail at that size is noise.
+      const OS_ICON = {
+        mac: '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M16.4 12.7c0-2 1.6-2.9 1.7-3-.9-1.3-2.3-1.5-2.8-1.5-1.2-.1-2.3.7-2.9.7-.6 0-1.5-.7-2.5-.7-1.3 0-2.5.8-3.1 2-1.3 2.3-.3 5.6.9 7.4.6.9 1.4 1.9 2.3 1.9.9 0 1.3-.6 2.4-.6 1.1 0 1.4.6 2.4.6 1 0 1.6-.9 2.2-1.8.7-1 1-2 1-2.1-.1 0-2-.8-2-2.9zM14.5 6.9c.5-.6.8-1.5.7-2.4-.7 0-1.6.5-2.1 1.1-.5.5-.9 1.4-.8 2.3.8.1 1.6-.4 2.2-1z"/></svg>',
+        windows: '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M3 5.6l7.4-1v7.1H3V5.6zm8.6-1.2L21 3v8.7h-9.4V4.4zM3 12.7h7.4V20L3 18.6v-5.9zm8.6 0H21V21l-9.4-1.3v-7z"/></svg>',
+        linux: '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M12 2c-1.7 0-3 1.5-3 3.4 0 1 .2 1.7.2 2.6 0 1-.9 1.7-1.6 3.1-.6 1.2-1.6 2-2.2 3.2-.5 1-.3 2 .3 2.6.4.4 1 .6 1.1 1.2.1.9 1.4 2.4 5.2 2.4s5.1-1.5 5.2-2.4c.1-.6.7-.8 1.1-1.2.6-.6.8-1.6.3-2.6-.6-1.2-1.6-2-2.2-3.2-.7-1.4-1.6-2.1-1.6-3.1 0-.9.2-1.6.2-2.6C15 3.5 13.7 2 12 2zm-1.3 3.1a.9.9 0 110 1.8.9.9 0 010-1.8zm2.6 0a.9.9 0 110 1.8.9.9 0 010-1.8zM12 8.4c.8 0 1.6.4 1.6.7 0 .3-.8.8-1.6.8s-1.6-.5-1.6-.8c0-.3.8-.7 1.6-.7zM9.2 20.6c-.3 0-.5-.2-.4-.4.1-.3.5-.4 1-.5.4-.1.8-.2 1-.5.1-.2.4-.2.5 0 .1.4-.4.8-.8 1-.5.2-1 .4-1.3.4zm5.6 0c-.3 0-.8-.2-1.3-.4-.4-.2-.9-.6-.8-1 .1-.2.4-.2.5 0 .2.3.6.4 1 .5.5.1.9.2 1 .5.1.2-.1.4-.4.4z"/></svg>',
+      };
+
       const ROUTES = [
         { kind: 'ntfy', label: 'ntfy', topic: true,
           hint: 'Point this at an ntfy server you run. Leave the address empty to use ntfy.sh, which needs the internet and sends your service names to a third party.' },
@@ -4536,6 +4593,15 @@
       // Event Listeners
       // Inner settings tabs. Purely presentational: every panel is populated exactly as before,
       // and the poll keeps refreshing all of them, so hiding one changes nothing but the scroll.
+      // Keep the fade honest: it appears only on an edge that has more content behind it.
+      function refreshSubnavFade() {
+        const nav = document.querySelector('.settings-subnav');
+        if (!nav) return;
+        const more = nav.scrollWidth - nav.clientWidth;
+        nav.classList.toggle('can-scroll-left', nav.scrollLeft > 2);
+        nav.classList.toggle('can-scroll-right', nav.scrollLeft < more - 2);
+      }
+
       function switchSettingsTab(name) {
         document.querySelectorAll('.settings-subtab').forEach((b) => {
           b.classList.toggle('active', b.dataset.subtab === name);
@@ -4543,8 +4609,18 @@
         document.querySelectorAll('.settings-panel').forEach((el) => {
           el.hidden = el.dataset.panel !== name;
         });
+        // Scroll the chosen tab into view: on a phone the strip scrolls, and picking the last tab
+        // from a restored session would otherwise leave the highlight off-screen.
+        const active = document.querySelector('.settings-subtab.active');
+        if (active && active.scrollIntoView) {
+          active.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+        }
+        refreshSubnavFade();
         try { localStorage.setItem('of-settings-subtab', name); } catch (_) {}
       }
+
+      document.querySelector('.settings-subnav')?.addEventListener('scroll', refreshSubnavFade, { passive: true });
+      window.addEventListener('resize', refreshSubnavFade);
 
       document.querySelectorAll('.settings-subtab').forEach((b) => {
         b.addEventListener('click', () => {
@@ -4563,6 +4639,8 @@
       if (elGearBtn) {
         elGearBtn.addEventListener('click', () => {
           switchTab(activeTab === 'settings' ? 'live' : 'settings');
+          // The strip is measured only once it is visible; a hidden flex container reports 0 width.
+          requestAnimationFrame(refreshSubnavFade);
         });
       }
 
@@ -4658,6 +4736,67 @@
       // The head serves many nodes. The bar stays hidden until a second node has actually
       // reported, so a single-machine install looks exactly as it did in v0.1.
       const NODE_KEY = 'observerfrog_active_node_v1';
+      // The picker's own state. `nodeSelect` is gone: a native <select> cannot show an icon per
+      // row and ignores the dashboard's colours on macOS, which is why the service add panel
+      // already had its own. The node picker now uses the same control.
+      let nodeRows = [];
+      let nodeValue = '';
+      let nodeMenuOpen = false;
+
+      function osIcon(kind) {
+        return OS_ICON[kind] || '';
+      }
+
+      function paintNodePicker() {
+        const host = document.getElementById('node-picker-menu');
+        const label = document.getElementById('node-picker-label');
+        const ico = document.getElementById('node-picker-ico');
+        const cur = nodeRows.find((n) => n.id === nodeValue) || nodeRows[0] || null;
+        if (label) label.textContent = cur ? (cur.local ? cur.name + ' (this machine)' : cur.name) : '—';
+        if (ico) ico.innerHTML = cur ? osIcon(cur.kind) : '';
+        if (!host) return;
+        host.innerHTML = nodeRows.map((n, i) => {
+          const text = n.local ? n.name + ' (this machine)' : n.name;
+          const suffix = n.silent ? ' — not reporting' : '';
+          return '<button class="svc-opt' + (n.id === nodeValue ? ' is-active' : '') + '"'
+            + ' type="button" role="option" aria-selected="' + (n.id === nodeValue) + '"'
+            + ' data-node-id="' + escapeHtml(n.id) + '" data-idx="' + i + '">'
+            + '<span class="svc-opt-ico">' + osIcon(n.kind) + '</span>'
+            + '<span class="svc-opt-name">' + escapeHtml(text) + escapeHtml(suffix) + '</span>'
+            + '</button>';
+        }).join('');
+      }
+
+      function toggleNodeMenu(force) {
+        const menu = document.getElementById('node-picker-menu');
+        const btn = document.getElementById('node-picker-btn');
+        if (!menu || !btn) return;
+        nodeMenuOpen = typeof force === 'boolean' ? force : !nodeMenuOpen;
+        menu.hidden = !nodeMenuOpen;
+        btn.setAttribute('aria-expanded', String(nodeMenuOpen));
+      }
+
+      // One delegated handler on the menu: rows are redrawn on every poll, so per-row listeners
+      // would be re-bound every thirty seconds and leak.
+      document.getElementById('node-picker-menu')?.addEventListener('click', (e) => {
+        const row = e.target.closest('[data-node-id]');
+        if (!row) return;
+        nodeValue = row.dataset.nodeId;
+        toggleNodeMenu(false);
+        onNodeChange();
+      });
+      document.getElementById('node-picker-btn')?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        toggleNodeMenu();
+      });
+      document.addEventListener('click', (e) => {
+        if (!nodeMenuOpen) return;
+        const picker = document.getElementById('node-picker');
+        if (picker && !picker.contains(e.target)) toggleNodeMenu(false);
+      });
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && nodeMenuOpen) toggleNodeMenu(false);
+      });
 
       async function loadNodes() {
         try {
@@ -4670,20 +4809,17 @@
             return;
           }
           nodeBar.hidden = false;
-          nodeSelect.innerHTML = nodes
-            .map((n) => {
-              const label = n.local ? n.name + ' (this machine)' : n.name;
-              const suffix = n.silent ? ' — not reporting' : '';
-              return '<option value="' + n.id + '">' + escapeHtml(label + suffix) + '</option>';
-            })
-            .join('');
+          nodeRows = nodes;
           let saved = '';
           try { saved = localStorage.getItem(NODE_KEY) || ''; } catch (_) {}
           if (saved && nodes.some((n) => n.id === saved)) {
-            nodeSelect.value = saved;
+            nodeValue = saved;
             activeNode = nodes[0] && nodes[0].id === saved ? '' : saved;
+          } else if (!nodeValue) {
+            nodeValue = nodes[0] ? nodes[0].id : '';
           }
-          const cur = nodes.find((n) => n.id === (activeNode || nodeSelect.value));
+          paintNodePicker();
+          const cur = nodes.find((n) => n.id === (activeNode || nodeValue));
           nodeBarState.textContent = cur && cur.silent ? 'not reporting' : '';
           API_ENDPOINT = endpointFor('/api/status');
         } catch (_) { /* a missing /api/nodes is a v0.1 head; hide the bar */ }
@@ -4695,10 +4831,12 @@
       }
 
       function onNodeChange() {
-        // Option 0 is always this machine, added first by /api/nodes. Selecting it clears the
+        // Row 0 is always this machine, added first by /api/nodes. Selecting it clears the
         // parameter so the v0.1 URL shape and cache key stay identical.
-        activeNode = nodeSelect.selectedIndex === 0 ? '' : nodeSelect.value;
-        try { localStorage.setItem(NODE_KEY, nodeSelect.value); } catch (_) {}
+        const first = nodeRows[0];
+        activeNode = first && first.id === nodeValue ? '' : nodeValue;
+        try { localStorage.setItem(NODE_KEY, nodeValue); } catch (_) {}
+        paintNodePicker();
         API_ENDPOINT = endpointFor('/api/status');
         fetchStatus(true);
       }
@@ -4706,10 +4844,9 @@
       // The pen edits a display name only. The reported name is what the device says about
       // itself and stays untouched, so clearing the override restores the truth.
       async function renameNode() {
-        const current = nodeSelect.value || '';
-        const shown = nodeSelect.options[nodeSelect.selectedIndex]
-          ? nodeSelect.options[nodeSelect.selectedIndex].textContent.replace(' (this machine)', '')
-          : current;
+        const current = nodeValue || '';
+        const row = nodeRows.find((n) => n.id === current);
+        const shown = row ? row.name : current;
         const next = window.prompt('Display name for ' + shown + ' (blank restores the name the device reports)', shown);
         if (next === null) return;
         try {
@@ -4723,7 +4860,6 @@
       }
 
       nodeEdit.addEventListener('click', renameNode);
-      nodeSelect.addEventListener('change', onNodeChange);
       setupiOSAppIcons();
       registerInlineServiceWorker();
       try {
