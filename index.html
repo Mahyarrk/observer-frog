@@ -2283,12 +2283,6 @@
             <h3 class="pair-subtitle">Sign out</h3>
             <button class="settings-btn" id="pw-logout" type="button">Sign out of this browser</button>
             <p class="settings-note" id="pw-note"></p>
-            <h3 class="pair-subtitle">Remove the password</h3>
-            <p class="settings-hint" style="color: var(--down-color);">
-              This opens the dashboard to anyone who can reach this port, with no sign-in at all.
-            </p>
-            <button class="settings-btn" id="pw-remove" type="button">Remove the password</button>
-            <p class="settings-note" id="pw-remove-note"></p>
           </div>
 
           <div class="settings-card">
@@ -2428,7 +2422,7 @@
       const API_BASE = (window.location.pathname.replace(/\/$/, '') || '');
       // Bump on every shell change. Declared before first use: a `const` referenced above its
       // declaration throws a TDZ error and takes the whole script down (it did).
-      const BUILD = 'of-41';
+      const BUILD = 'of-42';
       // Show the address actually in use, not a baked-in host.
       (function () {
         const el = document.getElementById('brand-url');
@@ -3974,23 +3968,7 @@
         await checkAuth();
       });
 
-      on('pw-remove', async () => {
-        const res = await postPassword({ action: 'remove', current: val('pw-current') });
-        const el = document.getElementById('pw-remove-note');
-        if (res.ok) {
-          clear('pw-current');
-          if (el) { el.style.color = 'var(--down-color)'; el.textContent = res.d.warning || 'password removed'; }
-          currentData = SEED_DATA;
-          if (tickTimer) { clearInterval(tickTimer); tickTimer = null; }
-          await checkAuth();
-          await boot();
-        } else if (el) {
-          el.style.color = 'var(--down-color)';
-          el.textContent = res.d.error || 'could not remove it';
-        }
-      });
-
-        on('set-add-open', async () => {
+      on('set-add-open', async () => {
           const panel = document.getElementById('set-add-panel');
           const btn = document.getElementById('set-add-open');
           if (!panel) return;

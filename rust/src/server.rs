@@ -975,54 +975,39 @@ fn route(
                 return (413, json_ct, json_bytes(&json!({"ok": false, "error": "body too large"})), false);
             }
             let body: Value = serde_json::from_slice(&req.body).unwrap_or(json!({}));
-            let action = body.get("action").and_then(|v| v.as_str()).unwrap_or("change");
             let current = body.get("current").and_then(|v| v.as_str()).unwrap_or("");
             let failure = |msg: &str| {
                 (403, json_ct.clone(), json_bytes(&json!({"ok": false, "error": msg})), false)
             };
 
-            // Removing needs the current password too: without it, anyone holding a phone left
-            // unlocked could open the port to the whole LAN.
             if crate::auth::password_is_set(&app.cfg.db_path)
                 && !crate::auth::verify_password(&app.cfg.db_path, current)
             {
                 return failure("the current password is not right");
             }
 
-            match action {
-                "remove" => match crate::auth::remove_password(&app.cfg.db_path) {
-                    Ok(()) => {
-                        *cookie = Some(crate::auth::clear_cookie());
-                        (200, json_ct, json_bytes(&json!({
-                            "ok": true, "removed": true,
-                            "warning": "the dashboard is now open to anyone who can reach this port",
-                        })), false)
-                    }
-                    Err(e) => (500, json_ct, json_bytes(&json!({"ok": false, "error": e})), false),
-                },
-                _ => {
-                    let next = body.get("password").and_then(|v| v.as_str()).unwrap_or("");
-                    match crate::auth::set_password(&app.cfg.db_path, next) {
-                        Ok(()) => {
-                            // set_password rotated the secret, so re-issue to this device: the whole
-                            // point is that other devices are logged out and this one is not.
-                            match crate::auth::mint(&app.cfg.db_path) {
-                                Some(token) => {
-                                    let exp = crate::auth::verify(&app.cfg.db_path, &token).unwrap_or(0);
-                                    let secure = app.tls_enabled.load(std::sync::atomic::Ordering::Relaxed);
-                                    *cookie = Some(crate::auth::set_cookie(
-                                        &token,
-                                        exp - crate::auth::now_s(),
-                                        secure,
-                                    ));
-                                }
-                                None => {}
-                            }
-                            (200, json_ct, json_bytes(&json!({"ok": true})), false)
+            // Changing only. Removing the password is not offered: a dashboard that can be opened
+            // to the whole LAN by anyone holding an unlocked phone is not a setting worth having.
+            let next = body.get("password").and_then(|v| v.as_str()).unwrap_or("");
+            match crate::auth::set_password(&app.cfg.db_path, next) {
+                Ok(()) => {
+                    // set_password rotated the secret, so re-issue to this device: the whole
+                    // point is that other devices are logged out and this one is not.
+                    match crate::auth::mint(&app.cfg.db_path) {
+                        Some(token) => {
+                            let exp = crate::auth::verify(&app.cfg.db_path, &token).unwrap_or(0);
+                            let secure = app.tls_enabled.load(std::sync::atomic::Ordering::Relaxed);
+                            *cookie = Some(crate::auth::set_cookie(
+                                &token,
+                                exp - crate::auth::now_s(),
+                                secure,
+                            ));
                         }
-                        Err(e) => (400, json_ct, json_bytes(&json!({"ok": false, "error": e})), false),
+                        None => {}
                     }
+                    (200, json_ct, json_bytes(&json!({"ok": true})), false)
                 }
+                Err(e) => (400, json_ct, json_bytes(&json!({"ok": false, "error": e})), false),
             }
         }
         ("POST", p) if p == "/api/auth/logout-all" || p == "/status/api/auth/logout-all" => {

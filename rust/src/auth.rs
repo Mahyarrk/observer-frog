@@ -115,14 +115,6 @@ pub fn verify_password(db_path: &Path, password: &str) -> bool {
     bcrypt::verify(password, &hash).unwrap_or(false)
 }
 
-/// Remove the password and the session secret. The gate opens, which the UI warns about in red.
-pub fn remove_password(db_path: &Path) -> Result<(), String> {
-    delete(db_path, KEY_HASH)?;
-    delete(db_path, KEY_SECRET)?;
-    Ok(())
-}
-
-
 // ---------------------------------------------------------------- first run
 
 /// The password a fresh install starts with.
@@ -415,9 +407,8 @@ mod tests {
         assert!(verify_password(&db_path, "a different secret"));
         assert!(!verify_password(&db_path, "correct horse battery"), "replaced means replaced");
 
-        remove_password(&db_path).unwrap();
-        assert!(!password_is_set(&db_path));
-        assert!(!verify_password(&db_path, "a different secret"));
+        // There is no way back to "no password": only a replacement.
+        assert!(password_is_set(&db_path));
     }
 
     #[test]
