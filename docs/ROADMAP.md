@@ -74,11 +74,16 @@ being asked.
 
 ### Scope
 
+- **Notification routes.** A section in Settings to pick one or several sinks. The operator decides
+  where an alert goes; nothing decides for them. Head-only: a tail's tab is greyed, because the head
+  already notifies on every machine's transitions.
+- **A dead man's switch.** A tail notices that its head stopped answering and says so. The ping is the
+  report it already sends; only the clock and the verdict are new. This is the one failure the head
+  cannot report about itself.
 - **PWA push.** VAPID key pair, a subscription table per device, a `push` handler in the service
   worker, and an enable button in Settings. iOS requires the PWA installed to the home screen and a
-  trusted certificate, both of which 0.5.0 now provides.
-- **Notification routes.** A section in Settings to pick one or several sinks. The operator decides
-  where an alert goes; nothing decides for them.
+  trusted certificate, both of which 0.5.0 now provides. If it does not fit beside the two items above,
+  it moves to 0.7.0 rather than delaying them.
 - **ntfy stays.** It is self-hosted on the LAN and works with no internet at all. Push routes through
   a vendor's servers and dies in an international cut. Both exist because they fail at different
   times.
@@ -94,6 +99,8 @@ Per-service or per-severity routing. Digest and quiet hours. Telegram and Simple
 - The same event also reaches ntfy when both are enabled, with the silence rules intact.
 - A cut test: with the internet down, push fails and ntfy still delivers on the LAN.
 - Toggling a route in Settings takes effect without a restart.
+
+The detailed plan lives in [PLAN-0.6.0.md](PLAN-0.6.0.md).
 
 ---
 
