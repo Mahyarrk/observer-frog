@@ -343,9 +343,9 @@ mod tests {
     #[test]
     fn a_report_address_yields_the_host_alone() {
         // A tail holds its report address; pairing needs the host from it, minus scheme and port.
-        assert_eq!(host_of("http://192.168.2.105:8771").as_deref(), Some("192.168.2.105"));
-        assert_eq!(host_of("https://192.168.2.105:8771").as_deref(), Some("192.168.2.105"));
-        assert_eq!(host_of("http://192.168.2.105:8771/").as_deref(), Some("192.168.2.105"));
+        assert_eq!(host_of("http://head.example:8771").as_deref(), Some("head.example"));
+        assert_eq!(host_of("https://head.example:8771").as_deref(), Some("head.example"));
+        assert_eq!(host_of("http://head.example:8771/").as_deref(), Some("head.example"));
         assert_eq!(host_of("http://head").as_deref(), Some("head"));
         assert_eq!(host_of(""), None);
         assert_eq!(host_of("   "), None);
