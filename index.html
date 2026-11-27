@@ -458,7 +458,9 @@
       margin: 0;
       padding: 6px 10px;
       min-width: 0;
-      flex: 0 1 auto;
+      /* Grows into the space the meta chips leave, so a long node name is readable rather than
+         truncated at a fixed share of the row. It can still shrink to nothing on a narrow phone. */
+      flex: 1 1 auto;
       /* Not `overflow: hidden`: it kept a long node name from stretching the bar, but it also clipped
          the picker's menu, so the dropdown looked like a dead button. Ellipsis on the label does the
          same job without swallowing the menu. */
@@ -473,16 +475,28 @@
       color: var(--muted-foreground, #64748b);
       text-transform: uppercase;
     }
-    .node-picker { flex: 1; min-width: 0; }
+    /* `.svc-picker` sets `min-width: 240px` further down the sheet at the same specificity, which
+       would win on order alone and force this row wider than its parent. The double class outranks
+       it, so the picker shrinks and the name truncates instead of shoving PORT/PWA off the row. */
+    .svc-picker.node-picker { flex: 1 1 0; min-width: 0; max-width: 100%; }
+    /* The caret and the pencil are fixed furniture; only the name may shrink. */
+    .node-picker .svc-picker-btn { min-width: 0; }
     .node-picker .svc-picker-current > span:last-child {
-      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
     }
+    .node-picker .svc-picker-current { min-width: 0; flex: 1 1 auto; }
+    .node-picker .svc-picker-caret { flex: 0 0 auto; }
     .node-picker .svc-picker-btn {
       padding: 0; background: transparent; border: 0; gap: 6px;
       font-size: 12px; min-height: 0;
     }
     .node-picker .svc-picker-btn:hover { background: transparent; border-color: transparent; }
-    .node-picker .svc-picker-menu { min-width: 200px; }
+    /* The menu is positioned, so it may be wider than the control without stretching it. Without
+       this the picker inherited a 200px floor and the node bar could never fit a narrow row. */
+    .node-picker .svc-picker-menu {
+      min-width: 0; width: max-content; min-width: min(240px, calc(100vw - 32px));
+      left: auto; right: auto;
+    }
     .node-picker .svc-picker-ico { width: 14px; }
     /* Every platform mark is monochrome: it inherits the text colour rather than carrying a brand
        colour, so the dropdown reads as one control and not as three logos. */
@@ -500,9 +514,10 @@
     .node-select:focus-visible { outline: 2px solid #10b981; outline-offset: 2px; border-radius: 6px; }
     .node-bar-state { font-size: 11px; color: var(--muted-foreground, #64748b); white-space: nowrap; }
     .node-edit {
-      flex: 0 0 auto;
-      width: 28px;
-      height: 28px;
+      /* Never shrinks: it is a button, not content, and shrinking it put it on top of the picker. */
+      flex: 0 0 26px;
+      width: 26px;
+        height: 26px;
       display: grid;
       place-items: center;
       border: 1px solid var(--border, #1e293b);
@@ -1001,7 +1016,27 @@
       align-items: center;
       gap: 0.4rem;
       white-space: nowrap;
-      flex-shrink: 0;
+      /* Fixed share of the row: it holds two short facts and must never be the thing that gets
+         pushed off the edge when a node name is long. */
+      flex: 0 0 auto;
+      min-width: 0;
+    }
+    /* Same chip treatment as LIVE API and the other header pills: inline-flex with its own
+       padding and border, so it reads as a status rather than loose text. */
+    .header-sub-meta .meta-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.3rem;
+      padding: 2px 7px;
+      border-radius: 999px;
+      border: 1px solid rgba(148, 163, 184, 0.22);
+      background: rgba(15, 23, 42, 0.5);
+      line-height: 1.5;
+    }
+    .header-sub-meta .meta-chip.ready {
+      color: #10b981;
+      border-color: rgba(16, 185, 129, 0.3);
+      background: rgba(16, 185, 129, 0.08);
     }
 
     .container {
@@ -1254,6 +1289,8 @@
       .node-bar {
         flex: 1 1 auto;
         min-width: 0;
+        /* On a phone the meta chips are the fixed furniture; the bar takes the rest. */
+        max-width: none;
       }
       .header-sub-meta {
         flex: 0 0 auto;
@@ -2119,13 +2156,13 @@
             <div class="svc-picker-menu" id="node-picker-menu" role="listbox" hidden></div>
           </div>
           <button class="node-edit" id="node-edit" type="button" title="Rename this node"
-                  aria-label="Rename this node">&#9998;</button>
+                              aria-label="Rename this node"><svg viewBox="0 0 24 24" width="13" height="13"
+                              fill="currentColor" aria-hidden="true"><path d="M3 17.25V21h3.75L17.8 9.94l-3.75-3.75L3 17.25zM20.7 7.04a1 1 0 000-1.41l-2.34-2.34a1 1 0 00-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg></button>
           <span class="node-bar-state" id="node-bar-state"></span>
         </div>
         <div class="header-sub-meta">
-          <span id="brand-port">PORT —</span>
-          <span style="color: #334155;">•</span>
-          <span style="color: #10b981;">PWA READY</span>
+          <span class="meta-chip" id="brand-port">PORT —</span>
+          <span class="meta-chip ready" id="brand-pwa">PWA</span>
         </div>
       </div>
     </div>
@@ -2503,7 +2540,7 @@
       const API_BASE = (window.location.pathname.replace(/\/$/, '') || '');
       // Bump on every shell change. Declared before first use: a `const` referenced above its
       // declaration throws a TDZ error and takes the whole script down (it did).
-      const BUILD = 'of-50';
+      const BUILD = 'of-55';
       // Show the address actually in use, not a baked-in host.
       (function () {
         const el = document.getElementById('brand-url');
