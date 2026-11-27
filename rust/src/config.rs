@@ -60,11 +60,13 @@ pub struct Service {
     pub max_age_s: i64,
     pub timeout: f64,
     pub ports: String,
-    /// A network interface that proves this service is up.
+    /// A network interface that also proves this service is up.
     ///
-    /// WireGuard is the case this exists for: on Linux it is a kernel module with no process at
-    /// all, only an interface, while on macOS it is a userspace process. A process probe alone
-    /// therefore found it on one platform and never on the other.
+    /// WireGuard is the case this exists for. Its userspace daemon, `wireguard-go`, runs on every
+    /// platform, so on Linux it *is* findable as a process. What Linux usually runs instead is the
+    /// kernel driver, which has no process at all and only an interface. So neither signal alone is
+    /// enough: a process probe finds the daemon where it is used and misses the driver everywhere
+    /// it is used, which is most Linux installs. Naming both means up is "either one answered".
     pub iface: String,
 }
 
