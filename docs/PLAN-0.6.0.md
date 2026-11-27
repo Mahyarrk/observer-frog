@@ -1,8 +1,10 @@
 # 0.6.0: a detailed plan
 
-The theme is "notifications that reach you". Two subjects, and only one of them is new code: a
-Settings tab where the operator chooses where alerts go, and a dead man's switch that speaks while
-the head cannot.
+The theme is "notifications that reach you". Two subjects: a Settings tab where the operator chooses
+which of several routes alerts go out on, and a dead man's switch that speaks while the head cannot.
+
+Both routes use one shape. That is the rule this version establishes, because the third route should
+cost a card and a config block, not a design discussion.
 
 ## The finding that shapes everything
 
@@ -63,6 +65,12 @@ one that speaks to a third party.
 10. **No same-machine watchdog.** No second process, no generated script, no second unit. A
     single-machine install has no dead man's switch, and the Settings hint says so rather than
     implying otherwise.
+11. **One rule for every route.** ntfy, webhook, and anything added later use the same shape: a
+    `[[sink]]` block with `enabled`, `url`, `topic`, `token_env`, `use_proxy`; the same Settings card;
+    the same test button; the same rate limiter; the same proxy default. A route that needs its own
+    settings shape is a route that needs its own justification.
+12. **A sink gains `enabled`.** Today presence means active, so unticking a route would have to delete
+    the operator's URL and topic. A field keeps their work while switching the route off.
 
 Measured, not guessed:
 
@@ -171,8 +179,12 @@ if let Some(msg) = wd.observe(outcome) { publish(msg) }
 
 The clock is only advanced by `Outcome::Up`. Neither an answer nor silence counts as life.
 
-Publishing goes through the existing `notify::publish_ntfy`, so the rate limiter, the proxy rule and
-the header shape are shared rather than reimplemented.
+Publishing goes through the existing `Notifier`, so the rate limiter, the proxy rule, the per-sink
+failure list and both routes are shared rather than reimplemented. The switch feeds the same `Event`
+that a service transition produces, which is why the message shapes in WP5 are the only new text.
+
+If one route fails and another succeeds, the switch still counts as delivered: the operator has been
+told, and the failure is recorded where the dashboard already shows it.
 
 **Acceptance:** a head stopped with `SIGKILL` produces exactly one *down* message after 300 s and no
 second one; restarting it produces exactly one *up*; a head answering 503 produces one *degraded* and
@@ -186,14 +198,18 @@ The tail cannot notify about a head it has never reached, so the endpoint must b
 Add to the report response, on success and on 401, 403, 413 and 503:
 
 ```json
-"alert": {
-  "ntfy_url": "https://ntfy.example.net",
-  "topic": "observer-frog",
-  "head_url": "https://head.example.net:8770/"
-}
+"alerts": [
+  { "kind": "ntfy",    "url": "https://ntfy.example.net", "topic": "observer-frog" },
+  { "kind": "webhook", "url": "https://hooks.example.net/frog" }
+]
 ```
 
-Absent or empty when no sink is configured, which is how a tail knows to stay quiet.
+A list, not one object, so a second route is data rather than a second field. Only enabled sinks are
+included, and the list is empty when none are, which is how a tail knows to stay quiet.
+
+What deliberately does **not** travel: `token_env`. That names an environment variable on the head, and
+a tail reading the same name would find either nothing or, worse, a different secret. A tail publishes
+to an unauthenticated route or stays quiet.
 
 The tail caches it in its own config, because it is needed at the moment the head cannot resend it.
 Refreshed on every successful or answered report.
@@ -221,36 +237,67 @@ because it is a fault that needs attention but not the siren.
 The body carries the machine that noticed and the last reason, because with several tails the reader
 needs to tell one outage from three.
 
+These shapes are what ntfy renders as a title and headers, and what a webhook receives as JSON fields
+(`title`, `message`, `priority`, `tags`). One `Event`, every route, no route-specific text.
+
 **Acceptance:** each message renders with a title, and the title contains the head's display name.
 
-### WP6: the Settings tab
+### WP6: the Settings tab, and one card per route
 
 A fourth sub-tab beside This Node, Services and Pairing: **Notifications**.
 
-Contents, in one card:
+Two cards, one per route, built from one component:
 
-- An enable checkbox for the ntfy route
-- ntfy base URL, defaulting to empty with the placeholder naming the shape
-- Topic
-- Optional token environment variable
-- A proxy opt-in checkbox, defaulted off, with the sentence that explains why off is the default
-- A **Send a test message** button
+**ntfy.** Enable checkbox, base URL, topic, optional token environment variable, proxy opt-in,
+**Send a test message**.
+
+**Webhook.** Enable checkbox, URL, optional token environment variable, proxy opt-in, **Send a test
+message**. No topic field: a webhook POSTs JSON to the URL and the receiver decides what to do with it.
+
+Each card is the same markup driven by a small table, not a copy. The fields differ by one: ntfy has a
+topic, a webhook has none. Everything else, including the proxy default and the test button, is
+identical, which is the whole point of decision 11.
 
 The test button matters more than it looks. A notification route that has never been exercised is a
 belief, not a configuration; the button turns it into a fact in one click and is the single highest
-value control on the tab.
+value control on the tab. It publishes a real event through the real sink code, not a separate probe
+path that could disagree with what production does.
 
 In tail mode the whole tab renders greyed with one sentence: *"This machine is a tail. Notifications
 belong to the head, which sees every machine's services."* Disabled, focusable-skipped, and it does not
 poll.
 
-`settings.rs::apply` currently handles top-level keys and simple sections. A `[[sink]]` array-of-tables
-is a third shape and needs a writer that replaces the whole `[[sink]]` block rather than editing a key
-inside it. That writer is the real work in this package.
+### WP6a: the config writer
 
-**Acceptance:** enabling the route, typing a URL and topic, and pressing test produces a real ntfy
-message; the tab is greyed and unexplainable-by-silence on a tail; the written config is valid TOML
-that reloads to the same values.
+`settings.rs::apply` handles top-level keys and simple sections. A `[[sink]]` array-of-tables is a
+third shape, and it is the real work in this package.
+
+The writer replaces sinks **by kind**, leaving any other block untouched:
+
+- set fields on an existing `[[sink]]` of that kind, or append a new one
+- remove the block when a route is cleared rather than merely unticked
+- never leave a partial block, because a malformed `[[sink]]` takes the node down at load
+
+Round-trip is the acceptance test: write, reload through `config::load`, compare field by field.
+A writer that produces TOML the parser reads differently is worse than no writer, since it fails at
+the next restart instead of at the click.
+
+**Acceptance:** enabling ntfy, typing a URL and topic, and pressing test produces a real ntfy message;
+the same for webhook, with a JSON body a receiver can read; unticking keeps the URL and stops sending;
+clearing removes the block; the written config reloads to identical values; the tab is greyed on a
+tail.
+
+### WP6b: honour `enabled` on every sink
+
+`config::as_sink` gains `enabled`, defaulting to **true** when the key is absent, so every config
+written before this version keeps working unchanged. `Notifier::deliver` skips a sink whose `enabled`
+is false, in the same place it currently skips an unknown kind.
+
+Defaulting to true rather than false is the only choice that does not silently stop alerts on an
+upgrade. A monitoring tool that goes quiet because of a schema change is the worst possible failure.
+
+**Acceptance:** an existing `[[sink]]` with no `enabled` key still publishes; adding `enabled = false`
+stops it without removing the block.
 
 ### WP7: documentation and the honest hint
 
@@ -268,17 +315,27 @@ limitation discovered in an outage is a defect.
 
 WP1 first, because it is a pure refactor that makes WP3 small. WP2 is an hour and removes a whole class
 of false alarm before it exists. WP3 and WP4 are the heart and belong together. WP5 is message text.
-WP6 is the largest package because it needs a new config writer. WP7 last, written against what was
-actually built.
+WP6b is small and must land before WP6, since a toggle has nothing to write to otherwise. WP6a is the
+largest single piece because it needs a config writer that round-trips. WP7 last, written against what
+was actually built.
 
 WP1 to WP5 touch no UI, so the switch can be proven with a killed process and a log line before the
 tab exists.
+
+Two routes rather than one cost roughly half a package over the ntfy-only plan: the writer is written
+once, the card is a template, and the dispatcher already branches by kind. The reason to do it now is
+that webhook is the route that works when ntfy does not, and having two is what makes the tab
+"routes" rather than a single vendor's settings.
 
 ## Not in this version
 
 Web push (VAPID, subscriptions, a service worker handler). Telegram and SimpleX. Per-service or
 per-severity routing. Digest and quiet hours. A watchdog for a single-machine install. Authentication
-on ntfy.
+on any route.
+
+The tab is built so that a third route is a `kind` string, a card in the same template, and a
+`[[sink]]` block. It is deliberately not built as a plugin system: three shapes of settings do not
+justify one.
 
 ## Settled after review
 
@@ -297,3 +354,12 @@ on ntfy.
   be a lie, and staying silent would leave an unpaired machine quietly reporting into a void.
 - **A recovery must be observed.** A head that returns and dies within the threshold was never up.
 - **Duplicate alarms across tails are accepted.**
+- **Every route shares one shape.** ntfy and webhook already exist in the dispatcher and differ by one
+  field, so a per-route settings design would be inventing difference where there is none. Telegram
+  and SimpleX, when they arrive, get the same treatment or they get an argument.
+- **`enabled` defaults to true.** An upgrade must never silence a working installation. The field
+  exists so unticking a box preserves the operator's URL and topic rather than deleting them.
+- **`token_env` does not travel to tails.** The name refers to an environment variable on the head; the
+  same name on another machine is at best absent and at worst a different secret.
+- **The switch publishes through `Notifier`, not to ntfy directly.** One route failing while another
+  succeeds still counts as delivered.
