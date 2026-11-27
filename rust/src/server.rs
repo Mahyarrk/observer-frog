@@ -1362,14 +1362,34 @@ fn route(
             }
             let b: Value = serde_json::from_slice(&req.body).unwrap_or(json!({}));
             let head = b.get("url").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+            let dashboard_port = b.get("dashboard_port").and_then(|v| v.as_u64()).map(|p| p as u16);
             if head.is_empty() {
                 return (400, json_ct, json_bytes(&json!({"ok": false, "error": "a head url is required"})), false);
             }
-            if !head.starts_with("http://") && !head.starts_with("https://") {
-                return (400, json_ct, json_bytes(&json!({"ok": false, "error": "the head url must start with http:// or https://"})), false);
-            }
+            // Accept a bare host or a report address too: the caller may only know where it
+            // reports, and the dashboard is a different listener. The scheme is discovered by
+            // asking the listener, never assumed, because a head with a certificate answers
+            // plain HTTP with a TLS alert that reads like a network fault.
+            let dash = crate::pair::host_of(&head)
+                .and_then(|h| crate::pair::probe_dashboard(&h, dashboard_port.unwrap_or(8770)))
+                .map(|(base, _)| base);
+            let head = match dash {
+                Some(base) => base,
+                None => {
+                    return (502, json_ct, json_bytes(&json!({
+                        "ok": false,
+                        "error": "no dashboard answered at that address, on either scheme",
+                    })), false)
+                }
+            };
+            // `report_to` stays the address tails report to. Pairing went to the dashboard, but
+            // reports keep going to the report port, which is the whole point of splitting them.
+            let report_to = match b.get("report_to").and_then(|v| v.as_str()) {
+                Some(r) if !r.trim().is_empty() => r.trim().to_string(),
+                _ => head.clone(),
+            };
             let path = crate::settings::target(&app.cfg);
-            if let Err(e) = crate::settings::apply(&path, &json!({ "report_to": head })) {
+            if let Err(e) = crate::settings::apply(&path, &json!({ "report_to": report_to })) {
                 return (500, json_ct, json_bytes(&json!({"ok": false, "error": e})), false);
             }
             let live = crate::config::load(Some(&path)).unwrap_or_else(|_| app.cfg.clone());

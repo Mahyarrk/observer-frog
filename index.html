@@ -2431,7 +2431,7 @@
       const API_BASE = (window.location.pathname.replace(/\/$/, '') || '');
       // Bump on every shell change. Declared before first use: a `const` referenced above its
       // declaration throws a TDZ error and takes the whole script down (it did).
-      const BUILD = 'of-44';
+      const BUILD = 'of-45';
       // Show the address actually in use, not a baked-in host.
       (function () {
         const el = document.getElementById('brand-url');
@@ -4100,13 +4100,22 @@
                 btn.disabled = true;
                 btn.textContent = 'pairing…';
                 try {
-                  // Pairing goes to the dashboard listener, exactly as advertised. The report
-                  // port answers only /api/report, so a request sent there gets a 404 that looks
-                  // like a broken head. The scheme comes from the advertisement too: a head with
-                  // a certificate says https, and a tail must not assume otherwise.
+                  // Pairing goes to the dashboard listener; reports keep going to the report
+                  // port. Both are sent so the server can keep them apart: the report address is
+                  // what `report_to` must store, and the dashboard port is where the request is
+                  // asked. The scheme is discovered by the server, which tries TLS and plain in
+                  // turn rather than guessing: a head with a certificate answers plain HTTP
+                  // with a TLS alert that reads like a network fault.
+                  const reportUrl = h.report_port
+                    ? h.url.replace(/^https?:\/\//, 'http://').replace(/:\d+\/?$/, '') + ':' + h.report_port
+                    : '';
                   const r = await fetch('api/pair/ask', {
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ url: h.url }),
+                    body: JSON.stringify({
+                      url: h.url,
+                      dashboard_port: h.dashboard_port || 8770,
+                      report_to: reportUrl,
+                    }),
                   });
                   const d = await r.json();
                   btn.textContent = d.ok ? 'requested ✓' : 'failed ✕';

@@ -214,13 +214,15 @@ pub fn run(cfg: Config, config_path: Option<PathBuf>, tls: Option<(PathBuf, Path
                                         // `head` is the report address and answers only
                                         // /api/report. The advertised dashboard port is remembered
                                         // per head; without one, the default is assumed.
-                                        let target = crate::pair::dashboard_of(&head, *known_dashboard_port.lock().unwrap());
-                                        let ask: Result<String, String> = match target {
-                                            Some(t) => match cfg_now.token() {
-                                                Ok(tok) => crate::pair::ask_head(&t, &cfg_now.node_id, &crate::config::hostname(), &tok, cfg_now.poll_interval as i64),
+                                        let dport = known_dashboard_port.lock().unwrap().unwrap_or(8770);
+                                        let dash = crate::pair::host_of(&head)
+                                            .and_then(|h| crate::pair::probe_dashboard(&h, dport));
+                                        let ask: Result<String, String> = match dash {
+                                            Some((base, _tls)) => match cfg_now.token() {
+                                                Ok(tok) => crate::pair::ask_head(&base, &cfg_now.node_id, &crate::config::hostname(), &tok, cfg_now.poll_interval as i64),
                                                 Err(why) => Err(why),
                                             },
-                                            None => Err("the head address is not a usable url".to_string()),
+                                            None => Err(format!("nothing answered on {dport} as a dashboard")),
                                         };
                                         match ask {
                                             Ok(msg) => log_line(&format!("pairing: {msg}")),

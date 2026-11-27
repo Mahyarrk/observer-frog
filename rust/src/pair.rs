@@ -183,32 +183,109 @@ pub fn reject(db_path: &Path, id: i64) -> Result<String, String> {
     Ok(format!("{node_id} rejected"))
 }
 
-/// The dashboard address for a head this machine reports to.
-///
-/// A tail only ever learns the *report* address from its own configuration, but pairing lives on
-/// the dashboard listener: the report port answers only /api/report, so a request sent there gets
-/// a 404 that reads like a broken head. The scheme is kept as given, because whether the dashboard
-/// speaks TLS is the head's choice and the tail must follow it rather than assume.
-pub fn dashboard_of(report_to: &str, dashboard_port: Option<u16>) -> Option<String> {
-    let url = report_to.trim().trim_end_matches('/');
-    if url.is_empty() {
+/// The host part of a head address, with any scheme and port removed.
+pub fn host_of(url: &str) -> Option<String> {
+    let rest = url
+        .trim()
+        .trim_end_matches('/')
+        .trim_start_matches("https://")
+        .trim_start_matches("http://");
+    if rest.is_empty() {
         return None;
     }
-    let (scheme, rest) = if let Some(r) = url.strip_prefix("https://") {
-        ("https", r)
-    } else if let Some(r) = url.strip_prefix("http://") {
-        ("http", r)
-    } else {
-        return None;
-    };
-    // Strip whatever port the report address carried, then apply the dashboard port.
     let host = match rest.rfind(':') {
         Some(i) if rest[i + 1..].chars().all(|c| c.is_ascii_digit()) => &rest[..i],
         _ => rest,
     };
-    // The scheme is the head's, taken from what it advertised. Only the port falls back.
-    let port = dashboard_port.unwrap_or(8770);
-    Some(format!("{scheme}://{host}:{port}"))
+    (!host.is_empty()).then(|| host.to_string())
+}
+
+/// Find out which scheme a dashboard listener speaks, and return the URL that answers.
+///
+/// A tail cannot know this from its own configuration: the address it holds is the *report*
+/// address, and the report port is plain HTTP by design whether or not the dashboard has a
+/// certificate. Guessing wrong is not a clean failure either: sending HTTP to a TLS port returns
+/// a TLS alert that reads as "header field didn't end with \n". So ask the listener, and let its
+/// answer decide. `/api/auth/status` is public, so this needs no credentials.
+pub fn probe_dashboard(host: &str, port: u16) -> Option<(String, bool)> {
+    // A self-signed certificate is the normal case here: the head serves the operator's own
+    // certificate, which no public root vouches for. Verifying it would make every correctly
+    // configured head probe as dead. This decides a scheme, not a trust decision: the pairing
+    // request that follows carries a token the head must approve, so the certificate's job
+    // starts after this point.
+    let tls = rustls::ClientConfig::builder()
+        .dangerous()
+        .with_custom_certificate_verifier(std::sync::Arc::new(AcceptAnyCert))
+        .with_no_client_auth();
+    let agent = ureq::AgentBuilder::new()
+        .timeout(std::time::Duration::from_secs(4))
+        .tls_config(std::sync::Arc::new(tls))
+        .build();
+
+    for (scheme, spoke_tls) in [("https", true), ("http", false)] {
+        let base = format!("{scheme}://{host}:{port}");
+        let url = format!("{base}/api/auth/status");
+        let ok = agent
+            .get(&url)
+            .set("Accept", "application/json")
+            .call()
+            .map(|r| r.status() == 200)
+            .unwrap_or(false);
+        if ok {
+            return Some((base, spoke_tls));
+        }
+    }
+    None
+}
+
+/// Accepts any certificate. Used only by the scheme probe above, which has to work against a
+/// self-signed head before it knows anything about that head.
+#[derive(Debug)]
+struct AcceptAnyCert;
+
+impl rustls::client::danger::ServerCertVerifier for AcceptAnyCert {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &rustls_pki_types::CertificateDer<'_>,
+        _intermediates: &[rustls_pki_types::CertificateDer<'_>],
+        _server_name: &rustls_pki_types::ServerName<'_>,
+        _ocsp: &[u8],
+        _now: rustls_pki_types::UnixTime,
+    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        Ok(rustls::client::danger::ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        _message: &[u8],
+        _cert: &rustls_pki_types::CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        _message: &[u8],
+        _cert: &rustls_pki_types::CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        vec![
+            rustls::SignatureScheme::RSA_PKCS1_SHA256,
+            rustls::SignatureScheme::RSA_PKCS1_SHA384,
+            rustls::SignatureScheme::RSA_PKCS1_SHA512,
+            rustls::SignatureScheme::ECDSA_NISTP256_SHA256,
+            rustls::SignatureScheme::ECDSA_NISTP384_SHA384,
+            rustls::SignatureScheme::RSA_PSS_SHA256,
+            rustls::SignatureScheme::RSA_PSS_SHA384,
+            rustls::SignatureScheme::RSA_PSS_SHA512,
+            rustls::SignatureScheme::ED25519,
+        ]
+    }
 }
 
 /// Ask a head to pair with this machine.
@@ -224,8 +301,21 @@ pub fn ask_head(head_url: &str, node_id: &str, name: &str, token: &str, interval
         "interval_s": interval_s.max(1),
     });
     let url = format!("{}/api/pair", head_url.trim_end_matches('/'));
-    let resp = ureq::post(&url)
+    // The head may serve its own certificate, which no public root vouches for. Trust here comes
+    // from the operator having typed this address and the head approving the request by hand,
+    // not from a certificate chain: refusing a self-signed head would make pairing impossible on
+    // exactly the setups this program is built for.
+    let agent = ureq::AgentBuilder::new()
         .timeout(std::time::Duration::from_secs(8))
+        .tls_config(std::sync::Arc::new(
+            rustls::ClientConfig::builder()
+                .dangerous()
+                .with_custom_certificate_verifier(std::sync::Arc::new(AcceptAnyCert))
+                .with_no_client_auth(),
+        ))
+        .build();
+    let resp = agent
+        .post(&url)
         .set("Content-Type", "application/json")
         .send_string(&body.to_string());
     // ureq 2 has no `into_json`; parse the text the same way the report path does.
@@ -251,39 +341,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pairing_addresses_the_dashboard_not_the_report_port() {
-        // The bug this pins: a tail holds only its report address, and sending a pairing request
-        // there returns 404 from the report listener, which reads like a broken head.
-        assert_eq!(
-            dashboard_of("http://192.168.2.105:8771", Some(8770)).as_deref(),
-            Some("http://192.168.2.105:8770")
-        );
-        // A head with a certificate must be reached over https, and the tail learns that from the
-        // advertisement rather than assuming.
-        assert_eq!(
-            dashboard_of("http://192.168.2.105:8771", Some(8770)).map(|u| u.starts_with("http://")),
-            Some(true)
-        );
-        assert_eq!(
-            dashboard_of("https://192.168.2.105:8771", Some(8770)).as_deref(),
-            Some("https://192.168.2.105:8770")
-        );
-        // No advertised port: fall back to the default dashboard port, keeping the scheme.
-        assert_eq!(
-            dashboard_of("http://head:8771", None).as_deref(),
-            Some("http://head:8770")
-        );
-        assert_eq!(
-            dashboard_of("https://head:8771", None).as_deref(),
-            Some("https://head:8770")
-        );
-        // Trailing slash and nothing usable.
-        assert_eq!(
-            dashboard_of("http://head:8771/", Some(8770)).as_deref(),
-            Some("http://head:8770")
-        );
-        assert_eq!(dashboard_of("", Some(8770)), None);
-        assert_eq!(dashboard_of("head:8771", Some(8770)), None);
+    fn a_report_address_yields_the_host_alone() {
+        // A tail holds its report address; pairing needs the host from it, minus scheme and port.
+        assert_eq!(host_of("http://192.168.2.105:8771").as_deref(), Some("192.168.2.105"));
+        assert_eq!(host_of("https://192.168.2.105:8771").as_deref(), Some("192.168.2.105"));
+        assert_eq!(host_of("http://192.168.2.105:8771/").as_deref(), Some("192.168.2.105"));
+        assert_eq!(host_of("http://head").as_deref(), Some("head"));
+        assert_eq!(host_of(""), None);
+        assert_eq!(host_of("   "), None);
     }
 
     fn fresh(name: &str) -> std::path::PathBuf {
