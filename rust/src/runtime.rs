@@ -144,6 +144,9 @@ pub fn run(cfg: Config, config_path: Option<PathBuf>, tls: Option<(PathBuf, Path
     // Remembered from the last discovery answer: the port the head's dashboard listens on. Pairing
     // has to reach that listener, and the report address this machine holds does not name it.
     let known_dashboard_port: Arc<Mutex<Option<u16>>> = Arc::new(Mutex::new(None));
+    // The dead man's switch. Only a tail can use it: it observes the reports this machine sends, and a
+    // head that reports nowhere has nothing to observe.
+    let mut wd = crate::watchdog::Watchdog::new();
     {
         let app = Arc::clone(&app);
         let watcher_holder = Arc::clone(&watcher_holder);
@@ -196,11 +199,48 @@ pub fn run(cfg: Config, config_path: Option<PathBuf>, tls: Option<(PathBuf, Path
                         // configured state the UI explains, not a failure to log every wave.
                         let wants_to_report = cfg_now.report_to.is_some() && cfg_now.token().is_ok();
                         if let Some(head) = cfg_now.report_to.clone().filter(|_| wants_to_report) {
-                            match crate::tail::report_once(&cfg_now, &head, &rows, ts) {
-                                Ok(_) => {
+                            // Classified, not string-matched: 401 needs a pairing request, 503 must
+                            // not, and neither is an outage. The verdict is a type now.
+                            let outcome = crate::tail::report_outcome(&cfg_now, &head, &rows, ts)
+                                .unwrap_or_else(|why| crate::tail::Outcome::Unreachable { why });
+
+                            // The switch sees every verdict, whatever else happens next. It publishes
+                            // through `Notifier`, so each enabled route carries the message and one
+                            // route failing does not suppress another.
+                            // The head names itself in every answer. Remember it, so an alert written
+                            // after the head has gone silent can still say which machine that was.
+                            if let Some(name) = outcome.head_name().map(|s| s.to_string()) {
+                                if cfg_now.head_name.as_deref() != Some(name.as_str()) {
+                                    let path = crate::settings::target(&cfg_now);
+                                    let _ = crate::settings::apply(&path, &serde_json::json!({ "head_name": name }));
+                                }
+                            }
+
+                            if let Some(signal) = wd.observe(&outcome) {
+                                // Remembered name first: after the head dies there is nobody to ask.
+                                let head_name = cfg_now
+                                    .head_name
+                                    .clone()
+                                    .or_else(|| crate::pair::host_of(&head))
+                                    .unwrap_or_else(|| "the head".to_string());
+                                let ev = crate::notify::watchdog_event(
+                                    &signal,
+                                    &head_name,
+                                    wd.last_why(),
+                                    app.notifier.lock().unwrap().as_ref().map(|n| n.dashboard_url().to_string()).as_deref().unwrap_or(""),
+                                );
+                                if let Some(n) = app.notifier.lock().unwrap().as_mut() {
+                                    n.submit_event(ev);
+                                    n.flush(None);
+                                }
+                            }
+
+                            match &outcome {
+                                crate::tail::Outcome::Up(_) => {
                                     app.reports_ok.fetch_add(1, Ordering::Relaxed);
                                 }
-                                Err(e) => {
+                                _ => {
+                                    let e = outcome.why();
                                     app.reports_failed.fetch_add(1, Ordering::Relaxed);
                                     *app.last_report_error.lock().unwrap() = Some(e.clone());
                                     log_line(&format!("report to {head} failed: {e}"));
@@ -208,7 +248,7 @@ pub fn run(cfg: Config, config_path: Option<PathBuf>, tls: Option<(PathBuf, Path
                                     // Ask once, then keep reporting quietly: a tail that re-asked
                                     // every wave would fill the head's list with duplicates, and a
                                     // person still has to click approve either way.
-                                    if e.contains("unknown token") && !*asked_to_pair.lock().unwrap() {
+                                    if outcome.code() == Some(401) && !*asked_to_pair.lock().unwrap() {
                                         *asked_to_pair.lock().unwrap() = true;
                                         // Ask the dashboard, not the report port we just failed on:
                                         // `head` is the report address and answers only

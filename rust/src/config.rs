@@ -10,6 +10,28 @@ use std::path::{Path, PathBuf};
 
 pub const PROBES: &[&str] = &["http", "tcp", "process", "file_age", "file_json"];
 pub const SINK_TYPES: &[&str] = &["ntfy", "webhook"];
+
+/// The poll interval is bounded because the dead man's switch uses a fixed 300 s threshold. A 10
+/// minute interval would mean the switch fires during normal operation, and a 5 second one would
+/// multiply the probe load for no benefit. Outside this range is refused with a reason, never
+/// clamped: a clamp hides a disagreement between the file and the behaviour.
+pub const MIN_POLL_INTERVAL_S: u64 = 15;
+pub const MAX_POLL_INTERVAL_S: u64 = 60;
+
+/// The interval, or a sentence saying why it was refused.
+pub fn check_poll_interval(n: u64) -> Result<u64, String> {
+    if n < MIN_POLL_INTERVAL_S {
+        return Err(format!(
+            "poll_interval {n} is below the minimum of {MIN_POLL_INTERVAL_S} seconds"
+        ));
+    }
+    if n > MAX_POLL_INTERVAL_S {
+        return Err(format!(
+            "poll_interval {n} is above the maximum of {MAX_POLL_INTERVAL_S} seconds"
+        ));
+    }
+    Ok(n)
+}
 pub const DEFAULT_PORT: u16 = 8770;
 pub const DEFAULT_POLL_INTERVAL: u64 = 30;
 
@@ -49,6 +71,9 @@ pub struct Service {
 #[derive(Debug, Clone, Default)]
 pub struct Sink {
     pub kind: String,
+    /// Off means configured but silent. The block stays so an operator can switch a route back on
+    /// without retyping it, which is why this is a field rather than "present means enabled".
+    pub enabled: bool,
     pub url: String,
     pub topic: String,
     pub token_env: String,
@@ -80,6 +105,9 @@ pub struct Config {
     /// both, either, or neither. This replaced the `report --to` CLI flag, which could only ever
     /// make a process do the second thing.
     pub report_to: Option<String>,
+    /// The head's display name, learned from its answers and kept. Needed at the moment the head
+    /// cannot resend it, which is the moment an alert is being written.
+    pub head_name: Option<String>,
     /// PEM certificate and key. Imported by the operator, never minted by this program: it
     /// terminates TLS and nothing else.
     ///
@@ -285,6 +313,9 @@ fn as_sink(raw: &toml::Table, where_: &str) -> Result<Sink, ConfigError> {
     }
     Ok(Sink {
         kind,
+        // Absent means enabled, so every config written before this field existed keeps publishing.
+        // The writer always writes it explicitly, so absence can only ever mean "old config".
+        enabled: bool_of(raw.get("enabled"), true),
         url: str_of(raw.get("url")),
         topic: str_of(raw.get("topic")),
         token_env: str_of(raw.get("token_env")),
@@ -364,7 +395,8 @@ pub fn load(path: Option<&Path>) -> Result<Config, ConfigError> {
     };
     let poll_interval = match int_of(raw.get("poll_interval")) {
         0 => DEFAULT_POLL_INTERVAL,
-        n => n.max(1) as u64,
+        n => check_poll_interval(n.max(1) as u64)
+            .map_err(|e| ConfigError(format!("{where_}: {e}")))?,
     };
     let db_path = match raw.get("db_path").and_then(|v| v.as_str()) {
         Some(s) if !s.is_empty() => PathBuf::from(s),
@@ -434,6 +466,10 @@ pub fn load(path: Option<&Path>) -> Result<Config, ConfigError> {
         discover,
         report_port,
         report_to,
+        head_name: {
+            let n = str_of(raw.get("head_name")).trim().to_string();
+            (!n.is_empty()).then_some(n)
+        },
         tls_cert: if tls_cert.is_empty() { None } else { Some(PathBuf::from(tls_cert)) },
         tls_key: if tls_key.is_empty() { None } else { Some(PathBuf::from(tls_key)) },
         token_env,
@@ -482,7 +518,7 @@ impl Watcher {
 
 #[cfg(test)]
 mod port_tests {
-    use super::port_of;
+    use super::{check_poll_interval, load, port_of};
 
     #[test]
     fn a_top_level_serve_false_means_tail() {
@@ -490,6 +526,30 @@ mod port_tests {
         // as a head, binding a port and skipping discovery.
         let dir = tempfile::tempdir().unwrap();
         let f = dir.path().join("tail.toml");
+        // The bounds exist for the dead man's switch: outside them the fixed five-minute threshold
+        // is either meaningless or always true.
+        assert!(check_poll_interval(15).is_ok());
+        assert!(check_poll_interval(60).is_ok());
+        let low = check_poll_interval(5).unwrap_err();
+        assert!(low.contains("below the minimum"), "{low}");
+        let high = check_poll_interval(600).unwrap_err();
+        assert!(high.contains("above the maximum"), "{high}");
+
+        std::fs::write(&f, "poll_interval = 5\n").unwrap();
+        let refused = load(Some(&f)).unwrap_err();
+        assert!(
+            refused.0.contains("below the minimum"),
+            "a bad interval must be refused at load, naming the range: {}",
+            refused.0
+        );
+
+        std::fs::write(&f, "poll_interval = 600\n").unwrap();
+        let refused = load(Some(&f)).unwrap_err();
+        assert!(refused.0.contains("above the maximum"), "{}", refused.0);
+
+        std::fs::write(&f, "poll_interval = 45\n").unwrap();
+        assert_eq!(load(Some(&f)).unwrap().poll_interval, 45);
+
         std::fs::write(&f, "serve = false\nreport_to = \"http://head:8771\"\n[node]\nid = \"t\"\n").unwrap();
         let cfg = super::load(Some(&f)).unwrap();
         assert!(!cfg.serve, "serve = false must be honoured");

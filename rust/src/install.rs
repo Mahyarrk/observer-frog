@@ -549,6 +549,7 @@ mod tests {
             discover: false,
             report_port: None,
             report_to: None,
+            head_name: None,
             tls_cert: None,
             tls_key: None,
             token_env: String::new(),

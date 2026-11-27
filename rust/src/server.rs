@@ -1033,6 +1033,50 @@ fn route(
         ("GET" | "HEAD", p) if p == "/api/health" || p == "/status/api/health" => {
             (200, json_ct, json_bytes(&json!({"ok": true, "uptime_s": now() - app.started_ts})), false)
         }
+        ("POST", _) if normalized == "/api/notify/test" => {
+            // Publishes through the real sink code, so a test that passes means production works.
+            // A route that has never been exercised is a belief, not a configuration.
+            let body: Value = serde_json::from_slice(&req.body).unwrap_or(json!({}));
+            let kind = body.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+            let cfg = crate::config::load(Some(&crate::settings::target(&app.cfg)))
+                .unwrap_or_else(|_| app.cfg.clone());
+            let sink = match cfg.sinks.iter().find(|s| s.kind == kind) {
+                Some(s) => s.clone(),
+                None => {
+                    return (404, json_ct, json_bytes(&json!({
+                        "ok": false, "error": format!("no {kind} route is configured"),
+                    })), false)
+                }
+            };
+            // Testing a disabled route would send a message the operator has switched off.
+            if !sink.enabled {
+                return (400, json_ct, json_bytes(&json!({
+                    "ok": false, "error": "that route is switched off; enable it first",
+                })), false);
+            }
+            let event = crate::notify::Event {
+                title: format!("{}: Observer Frog test message", cfg.node_name),
+                head: cfg.node_name.clone(),
+                message: "If you can read this, the route works. Nothing is wrong.".to_string(),
+                priority: crate::notify::PRIORITY_RECOVERY,
+                tags: vec!["white_check_mark".to_string()],
+                click: format!("{}://{}:{}/", if app.tls_enabled.load(std::sync::atomic::Ordering::Relaxed) { "https" } else { "http" }, cfg.bind, cfg.port),
+            };
+            let result = match sink.kind.as_str() {
+                "ntfy" => {
+                    let topic = if sink.topic.is_empty() { "observer-frog".to_string() } else { sink.topic.clone() };
+                    crate::notify::publish_ntfy(&sink, &topic, &event)
+                }
+                "webhook" => crate::notify::publish_webhook(&sink, &event, ""),
+                other => Err(format!("unknown route {other:?}")),
+            };
+            match result {
+                Ok(code) => (200, json_ct, json_bytes(&json!({
+                    "ok": true, "detail": format!("delivered, the far end answered {code}"),
+                })), false),
+                Err(e) => (502, json_ct, json_bytes(&json!({"ok": false, "error": e})), false),
+            }
+        }
         ("POST", _) if normalized == "/api/node/name" => {
             let body: Value = serde_json::from_slice(&req.body).unwrap_or(json!({}));
             let node = body.get("node").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
@@ -1101,8 +1145,18 @@ fn route(
                 "autostart": autostart,
                 "autostart_supported": cfg!(target_os = "macos") || cfg!(target_os = "linux"),
                 "services": cfg.services.len(),
-            })), false)
-        }
+                // The routes themselves, minus every secret: the tab needs to show what is
+                // configured, and `token_env` is the name of a variable, never the value.
+                "sinks": cfg.sinks.iter().map(|s| json!({
+                    "kind": s.kind,
+                    "enabled": s.enabled,
+                    "url": s.url,
+                    "topic": s.topic,
+                    "token_env": s.token_env,
+                    "use_proxy": s.use_proxy,
+                })).collect::<Vec<_>>(),
+                })), false)
+                }
         ("POST", _) if normalized == "/api/settings" => {
             if req.body.len() > MAX_BODY {
                 return (413, json_ct, json_bytes(&json!({"ok": false, "error": "body too large"})), false);

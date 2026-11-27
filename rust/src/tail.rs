@@ -64,11 +64,97 @@ pub fn report_once(cfg: &Config, head: &str, rows: &[Value], observed_at: i64) -
     post(&opts, &build_report(cfg, rows, observed_at))
 }
 
+/// The same report, classified. Used by the poll wave, which has to tell an outage from a refusal.
+pub fn report_outcome(cfg: &Config, head: &str, rows: &[Value], observed_at: i64) -> Result<Outcome, String> {
+    let opts = TailOptions { report_to: head.to_string(), token: cfg.token()? };
+    Ok(post_outcome(&opts, &build_report(cfg, rows, observed_at)))
+}
+
+/// What a report attempt told us about the head.
+///
+/// Three verdicts, because they need three different responses. `Answered` is the one that is easy to
+/// get wrong: a 401 means the head is alive and refusing this machine, which is a fault the operator
+/// fixes by pairing, not an outage. Matching on the prose of an error string cannot express that
+/// distinction safely, which is why this is a type.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Outcome {
+    /// 200. The head applied the report.
+    Up(Value),
+    /// The head answered with a status that is not 200. It is alive; it is not accepting this report.
+    /// The name travels with it, because an unpaired tail learns the head's name from its 401 and
+    /// needs it for the alert it is about to write.
+    Answered { code: u16, why: String, head_name: Option<String> },
+    /// Nothing answered: timeout, refused, DNS. The head may be dead or the network may be.
+    Unreachable { why: String },
+}
+
+impl Outcome {
+    pub fn is_up(&self) -> bool {
+        matches!(self, Outcome::Up(_))
+    }
+
+    pub fn answered(&self) -> bool {
+        matches!(self, Outcome::Answered { .. })
+    }
+
+    /// The reason, whatever the verdict, for a log line.
+    pub fn why(&self) -> String {
+        match self {
+            Outcome::Up(_) => "ok".into(),
+            Outcome::Answered { code, why, .. } => format!("{code}: {why}"),
+            Outcome::Unreachable { why } => why.clone(),
+        }
+    }
+
+    /// The head's own name, when the answer carried one. Both a success and a refusal do, which is
+    /// how a tail learns the name before it needs to use it.
+    pub fn head_name(&self) -> Option<&str> {
+        match self {
+            Outcome::Up(v) => v.get("head_name").and_then(|n| n.as_str()),
+            Outcome::Answered { head_name, .. } => head_name.as_deref(),
+            Outcome::Unreachable { .. } => None,
+        }
+    }
+
+    /// The status the head answered with, when it answered.
+    pub fn code(&self) -> Option<u16> {
+        match self {
+            Outcome::Answered { code, .. } => Some(*code),
+            _ => None,
+        }
+    }
+}
+
+/// Post one report and classify what came back.
+pub fn post_outcome(opts: &TailOptions, body: &Value) -> Outcome {
+    match post_raw(opts, body) {
+        Ok(v) => {
+            // A 200 whose body is not JSON still means the head answered and applied it; the answer
+            // is only ever used for a verbose log line.
+            Outcome::Up(v)
+        }
+        Err((Some(code), why, raw)) => {
+            // The name rides on refusals too, so a tail that has never paired still learns it.
+            let head_name = serde_json::from_str::<Value>(&raw)
+                .ok()
+                .and_then(|v| v.get("head_name").and_then(|n| n.as_str()).map(|s| s.to_string()));
+            Outcome::Answered { code, why, head_name }
+        }
+        Err((None, why, _)) => Outcome::Unreachable { why },
+    }
+}
+
 /// Post one report. Returns the head's answer or a readable failure.
 pub fn post(opts: &TailOptions, body: &Value) -> Result<Value, String> {
+    post_raw(opts, body).map_err(|(_, why, _)| why)
+}
+
+/// The same post, but keeping the status code so a caller can tell "answered and refused" from
+/// "nothing answered" without inspecting the message. `None` means the request never completed.
+fn post_raw(opts: &TailOptions, body: &Value) -> Result<Value, (Option<u16>, String, String)> {
     let base = opts.report_to.trim_end_matches('/');
     if base.is_empty() {
-        return Err("report_to is empty".into());
+        return Err((None, "report_to is empty".into(), String::new()));
     }
     // A token that reaches the head through the proxy would be reported on by the thing it is
     // monitoring, so the reporting path never uses a proxy.
@@ -85,26 +171,28 @@ pub fn post(opts: &TailOptions, body: &Value) -> Result<Value, String> {
 
     match resp {
         Ok(r) => {
-            let code = r.status();
             let text = r.into_string().unwrap_or_default();
             match serde_json::from_str::<Value>(&text) {
                 Ok(v) => Ok(v),
-                Err(_) => Err(format!("HTTP {code}: {text}")),
+                // Answered, so still a life sign; the body is only read for the verbose log.
+                Err(_) => Ok(serde_json::json!({ "ok": true })),
             }
         }
         Err(ureq::Error::Status(code, r)) => {
             let text = r.into_string().unwrap_or_default();
-            Err(match code {
-                // Phrased so the poller can recognise it: this exact case is what triggers a
-                // pairing request, and a head that simply is not acting as head must not.
-                401 => "401 unauthorised: unknown token — this head has no enrolment for this machine".to_string(),
-                503 => format!("503 the head is not accepting reports: {text}"),
-                403 => format!("403 rejected: {text}"),
-                413 => "413 report too large".to_string(),
-                _ => format!("HTTP {code}: {text}"),
-            })
+            let raw = text.clone();
+            let why = match code {
+                // The wording is kept for the log and for the operator. Nothing decides anything by
+                // reading it: `Outcome::Answered { code, .. }` is what a caller tests.
+                401 => "unknown token; this head has no enrolment for this machine".to_string(),
+                503 => format!("the head is not accepting reports: {text}"),
+                403 => format!("rejected: {text}"),
+                413 => "report too large".to_string(),
+                _ => text,
+            };
+            Err((Some(code), why, raw))
         }
-        Err(e) => Err(format!("cannot reach {}: {e}", opts.report_to)),
+        Err(e) => Err((None, format!("cannot reach {}: {e}", opts.report_to), String::new())),
     }
 }
 
@@ -206,6 +294,7 @@ mod tests {
             discover: false,
             report_port: None,
             report_to: None,
+            head_name: None,
             tls_cert: None,
             tls_key: None,
             token_env: String::new(),
@@ -252,6 +341,17 @@ mod tests {
     #[test]
     fn posting_with_no_head_fails_readably() {
         let opts = TailOptions { report_to: String::new(), token: "x".into() };
+        // The verdicts a caller can act on, asserted without a server: the classification is a
+        // function of the status code, never of the wording of the message.
+        let refused = Outcome::Answered { code: 401, why: "unknown token".into(), head_name: None };
+        assert!(refused.answered() && !refused.is_up());
+        assert_eq!(refused.code(), Some(401));
+        let silent = Outcome::Unreachable { why: "cannot reach".into() };
+        assert!(!silent.answered() && !silent.is_up());
+        assert_eq!(silent.code(), None, "no answer means no status");
+        let ok = Outcome::Up(serde_json::json!({}));
+        assert!(ok.is_up() && !ok.answered());
+
         let err = post(&opts, &serde_json::json!({})).unwrap_err();
         assert!(err.contains("report_to is empty"), "got {err}");
     }

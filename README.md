@@ -58,6 +58,17 @@ observer-frog discover             # what is running on this machine right now
 The same actions are behind the gear icon in the header, in the Services tab, with custom ports
 and removal.
 
+## Notifications
+
+The head can tell you when something goes down, through an ntfy server you run or any URL that takes
+a JSON POST. Both live in Settings, on the Notifications tab, and both work the same way: a tick, an
+address, and a test button that sends a real message so you find out now rather than during an outage.
+
+A machine that reports to a head also notices when that head stops answering, and says so once. That
+is the one failure a head cannot report about itself.
+
+Details and the config it writes: **[docs/GUIDE.md](docs/GUIDE.md#notifications)**.
+
 ## More
 
 Setup, pairing, probe types, the config format, endpoints, and what it deliberately does not do:

@@ -167,7 +167,7 @@ put Caddy, nginx, WireGuard or Tailscale in front if you would rather not manage
 
 No service control. There is no start or stop endpoint, so a bad token cannot restart anything.
 
-No public status pages and no notification zoo. Two sinks: ntfy, and a generic webhook that accepts
+No public status pages and no notification zoo. Two routes: ntfy, and a generic webhook that accepts
 a JSON POST. ntfy is preferred because it can be self-hosted, which means it still works when the
 internet does not.
 
@@ -176,6 +176,78 @@ them; there is no buffer to drain later.
 
 No second service definition per role. One unit per machine, named for the machine rather than the
 job, because a name that changes with a checkbox is a name a restart cannot find.
+
+## Notifications
+
+Configure them in Settings, on the Notifications tab. That tab exists only on the head, because the
+head already sees every machine's services: a tail notifying too would duplicate every message.
+
+Two routes, one shape. Each has an enable tick, a URL, an optional token environment variable, and a
+proxy opt-in. ntfy also has a topic.
+
+**Send a test message** publishes through the real route code, so a test that succeeds means
+production will. It only appears on a route that is switched on.
+
+Unticking a route keeps everything you typed and simply stops sending. **Clear** deletes the block,
+and asks twice.
+
+### The config it writes
+
+```toml
+[[sink]]
+type = "ntfy"
+enabled = true
+url = "http://ntfy.example.net:2586"  # your own ntfy, or leave empty for https://ntfy.sh
+topic = "observer-frog"
+token_env = ""                      # name of an env var holding a bearer token, if you need one
+use_proxy = false                   # never route alerts through the proxy you monitor
+```
+
+```toml
+[[sink]]
+type = "webhook"
+enabled = true
+url = "https://hooks.example.net/frog"
+token_env = ""
+use_proxy = false
+```
+
+A webhook receives this JSON:
+
+```json
+{
+  "title": "Observer Frog head is down",
+  "head": "HeadName",
+  "message": "...",
+  "priority": 4,
+  "tags": ["rotating_light"],
+  "click": "https://head.example.net:8770/",
+  "source": "observer-frog"
+}
+```
+
+`enabled` is written every time, including when it is false. A missing key would read back as enabled,
+which is how a route you switched off would come back to life on the next save.
+
+### The dead man's switch
+
+A tail can tell when its head stops answering, and that is the one failure a head cannot report about
+itself. It uses the report it already sends as the heartbeat, so nothing new is polled.
+
+- A **200** means the head is up. Nothing is sent.
+- **Any other answer** means the head is alive but refusing: usually a pairing or role problem. One
+  `degraded` message is sent, and nothing more until things change.
+- **No answer for five minutes** means the head is down. One `down` message is sent.
+- When a 200 returns, one `up` message is sent.
+
+Each transition sends one message. A head that stays down for an hour produces one alert, not twelve.
+
+The five-minute threshold is fixed, and the poll interval is bounded between 15 and 60 seconds, so the
+worst case is five missed pings.
+
+**What it cannot do:** it needs another machine to notice, and an ntfy server that is not on the dying
+head. If your head is the only machine and ntfy runs on the same box, nothing will tell you the
+process died. That is stated on the tab rather than left to be discovered.
 
 ## Honest limits
 
@@ -222,7 +294,7 @@ makes it real.
 ## Tests
 
 ```bash
-cd rust && cargo test        # 126 tests
+cd rust && cargo test        # 140 tests
 ```
 
 Every behavioural rule in `docs/DESIGN.md` has a test named after it. One test does not check

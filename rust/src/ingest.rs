@@ -260,10 +260,53 @@ pub fn apply(app: &App, report: &Report, head_now: i64) -> rusqlite::Result<usiz
     Ok(count)
 }
 
+/// The alert routes a tail should use when this head stops answering.
+///
+/// Handed out on **every** response, errors included, because the cases that most need a message are
+/// the cases where the head is not serving: a tail that has never paired gets a 401 forever, and that
+/// is exactly the fact it has to be able to announce.
+///
+/// Only enabled sinks travel, and `token_env` never does: it names an environment variable on this
+/// machine, and the same name elsewhere is at best absent and at worst a different secret.
+pub fn alerts_for(cfg: &crate::config::Config) -> Value {
+    let routes: Vec<Value> = cfg
+        .sinks
+        .iter()
+        .filter(|s| s.enabled && !s.url.is_empty())
+        .map(|s| {
+            json!({
+                "kind": s.kind,
+                "url": s.url,
+                "topic": s.topic,
+                "use_proxy": s.use_proxy,
+            })
+        })
+        .collect();
+    // The head's own name, so a tail can say which machine is silent rather than quoting an address.
+    // Taken from the same config that serves the dashboard, so it is the name the operator sees.
+    json!({ "alerts": routes, "head_name": cfg.node_name })
+}
+
+/// Attach the alert routes to a response body. A body that is not an object is left alone, so this
+/// can be applied on every return path without inspecting each one.
+fn with_alerts(mut body: Value, alerts: &Value) -> Value {
+    if let (Some(obj), Some(extra)) = (body.as_object_mut(), alerts.as_object()) {
+        for (k, v) in extra {
+            obj.insert(k.clone(), v.clone());
+        }
+    }
+    body
+}
+
 /// The HTTP entry point for POST /api/report.
 pub fn handle_report(app: &App, req_headers: &std::collections::HashMap<String, String>, body: &[u8], declared_len: usize) -> (u16, Value) {
-    let json_ct = ();
-    let _ = json_ct;
+    // Read once, before any return path, so no error can escape without the routes on it.
+    let alerts = alerts_for(&crate::config::load(Some(&crate::settings::target(&app.cfg))).unwrap_or_else(|_| app.cfg.clone()));
+    let (code, value) = handle_report_inner(app, req_headers, body, declared_len);
+    (code, with_alerts(value, &alerts))
+}
+
+fn handle_report_inner(app: &App, req_headers: &std::collections::HashMap<String, String>, body: &[u8], declared_len: usize) -> (u16, Value) {
     if declared_len > REPORT_MAX_BODY {
         return (413, json!({"ok": false, "error": "report too large"}));
     }
@@ -363,6 +406,49 @@ mod tests {
         assert_eq!(r.node_id, "laptop");
         assert_eq!(r.interval_s, 60);
         assert_eq!(r.services.unwrap()[0].id, "nginx");
+    }
+
+    #[test]
+    #[test]
+    fn alert_routes_travel_to_a_tail_and_carry_no_secrets() {
+        let dir = std::env::temp_dir().join(format!("of-alerts-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let f = dir.join("alerts.toml");
+        std::fs::write(&f, "").unwrap();
+        let mut cfg = crate::config::load(Some(&f)).unwrap();
+        cfg.sinks = vec![
+            crate::config::Sink {
+                kind: "ntfy".into(), enabled: true,
+                url: "https://ntfy.example".into(), topic: "frog".into(),
+                token_env: "OF_NTFY_TOKEN".into(), use_proxy: false,
+            },
+            crate::config::Sink {
+                kind: "webhook".into(), enabled: false,
+                url: "https://hooks.example".into(), topic: String::new(),
+                token_env: String::new(), use_proxy: true,
+            },
+        ];
+        let v = alerts_for(&cfg);
+        let list = v.get("alerts").unwrap().as_array().unwrap();
+        assert_eq!(list.len(), 1, "a disabled route must not be advertised");
+        assert_eq!(list[0]["kind"], "ntfy");
+        assert_eq!(list[0]["topic"], "frog");
+        assert!(
+            list[0].get("token_env").is_none(),
+            "the variable name is local to the head and must not travel"
+        );
+
+        // And it attaches to an error body, which is the case that matters: a tail that has never
+        // paired has to be able to announce that fact.
+        let err = json!({"ok": false, "error": "unknown token"});
+        let out = with_alerts(err, &v);
+        assert_eq!(out["error"], "unknown token");
+        assert_eq!(out["alerts"].as_array().unwrap().len(), 1);
+
+        // No sinks configured: an empty list, which is how a tail knows to stay quiet.
+        cfg.sinks.clear();
+        let none = alerts_for(&cfg);
+        assert_eq!(none["alerts"].as_array().unwrap().len(), 0);
     }
 
     #[test]

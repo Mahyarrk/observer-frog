@@ -109,6 +109,129 @@ fn set_top_level(text: &str, key: &str, value: &str) -> String {
     joined
 }
 
+/// Replace the `[[sink]]` block of one kind, leaving every other block untouched.
+///
+/// `sink` is an array of tables, which `set_top_level` and `set_in_section` cannot express: a block
+/// spans several lines and reappears further down the file. The whole file is walked once, blocks of
+/// other kinds are copied verbatim, and the target block is rebuilt from scratch.
+///
+/// Two rules that exist because getting them wrong is silent:
+///   `enabled` is always written explicitly, so a switched-off route can never be mistaken for a
+///   config written before the field existed, which the reader defaults to true.
+///   A block belonging to another kind is never rewritten, not even to reformat it, because that is
+///   how an operator's disabled route comes back to life.
+pub fn write_sink(text: &str, kind: &str, fields: &serde_json::Value) -> String {
+    // The kind lives inside the block, so a block cannot be identified until it has been collected.
+    // One walk: gather blocks, then decide.
+    let mut blocks: Vec<Vec<String>> = Vec::new();
+    let mut preamble: Vec<String> = Vec::new();
+    let mut current: Option<Vec<String>> = None;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed == "[[sink]]" {
+            if let Some(b) = current.take() {
+                blocks.push(b);
+            }
+            current = Some(vec![line.to_string()]);
+            continue;
+        }
+        if trimmed.starts_with('[') {
+            if let Some(b) = current.take() {
+                blocks.push(b);
+            }
+            preamble.push(line.to_string());
+            continue;
+        }
+        match current.as_mut() {
+            Some(b) => b.push(line.to_string()),
+            None => preamble.push(line.to_string()),
+        }
+    }
+    if let Some(b) = current.take() {
+        blocks.push(b);
+    }
+
+    let kind_of = |block: &[String]| -> String {
+        for l in block {
+            if let Some((k, v)) = l.trim().split_once('=') {
+                if k.trim() == "type" {
+                    return v.trim().trim_matches('"').to_string();
+                }
+            }
+        }
+        String::new()
+    };
+
+    let mut kept: Vec<Vec<String>> = Vec::new();
+    let mut replaced = false;
+    for b in blocks {
+        if kind_of(&b) == kind {
+            if fields.is_null() {
+                replaced = true;
+                continue; // cleared: drop the block entirely
+            }
+            kept.push(rebuild_sink(&b, kind, fields));
+            replaced = true;
+        } else {
+            kept.push(b);
+        }
+    }
+    if !replaced && !fields.is_null() {
+        kept.push(rebuild_sink(&[], kind, fields));
+    }
+
+    let mut out: Vec<String> = preamble;
+    while out.last().map(|l| l.trim().is_empty()).unwrap_or(false) {
+        out.pop();
+    }
+    if !out.is_empty() && !kept.is_empty() {
+        out.push(String::new());
+    }
+    for (i, b) in kept.iter().enumerate() {
+        if i > 0 {
+            out.push(String::new());
+        }
+        out.extend(b.iter().cloned());
+    }
+    let mut joined = out.join("\n");
+    if !joined.ends_with('\n') {
+        joined.push('\n');
+    }
+    joined
+}
+
+/// One `[[sink]]` block. Values present in `fields` are set, values absent keep what the block had,
+/// except `enabled`, which is always written.
+fn rebuild_sink(old: &[String], kind: &str, fields: &serde_json::Value) -> Vec<String> {
+    let get = |k: &str| old.iter().find_map(|l| {
+        let (a, b) = l.trim().split_once('=')?;
+        (a.trim() == k).then(|| b.trim().to_string())
+    });
+    let str_of = |k: &str| fields.get(k).and_then(|v| v.as_str()).map(|s| format!("{s:?}"));
+    let bool_of = |k: &str| fields.get(k).and_then(|v| v.as_bool()).map(|b| b.to_string());
+
+    let mut out = vec!["[[sink]]".to_string()];
+    out.push(format!("type = {kind:?}"));
+    // Explicit always: a missing key would read back as enabled and silently resurrect a route the
+    // operator switched off.
+    let enabled = bool_of("enabled")
+        .or_else(|| get("enabled"))
+        .unwrap_or_else(|| "true".to_string());
+    out.push(format!("enabled = {enabled}"));
+    out.push(format!("url = {}", str_of("url").or_else(|| get("url")).unwrap_or_else(|| "\"\"".into())));
+    // Only ntfy has a topic; writing an empty one to a webhook would be noise in the file.
+    if kind == "ntfy" {
+        out.push(format!("topic = {}", str_of("topic").or_else(|| get("topic")).unwrap_or_else(|| "\"\"".into())));
+    }
+    let token = str_of("token_env").or_else(|| get("token_env")).unwrap_or_else(|| "\"\"".into());
+    out.push(format!("token_env = {token}"));
+    let proxy = bool_of("use_proxy")
+        .or_else(|| get("use_proxy"))
+        .unwrap_or_else(|| "false".to_string());
+    out.push(format!("use_proxy = {proxy}"));
+    out
+}
+
 fn write(path: &Path, text: &str) -> Result<(), String> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
@@ -139,6 +262,33 @@ pub fn apply(path: &Path, changes: &serde_json::Value) -> Result<Vec<String>, St
             if before != text {
                 note(&mut changed, key);
             }
+        }
+    }
+
+    // A route's settings arrive as `{"sink": {"kind": "ntfy", "enabled": true, ...}}`. A null sink
+    // means the operator cleared that route, which is the only case that deletes the block.
+    if let Some(sink) = changes.get("sink") {
+        let kind = sink.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+        if !crate::config::SINK_TYPES.contains(&kind) && !sink.is_null() {
+            return Err(format!(
+                "unknown sink type {kind:?}; expected one of {}",
+                crate::config::SINK_TYPES.join(", ")
+            ));
+        }
+        let before = text.clone();
+        text = write_sink(&text, kind, sink);
+        if before != text {
+            note(&mut changed, "sink");
+        }
+    }
+
+    // The head's name, learned by a tail from its answers. Written at the top level, which is what
+    // `config` reads, so it survives the restart that would otherwise forget who the head was.
+    if let Some(v) = changes.get("head_name").and_then(|x| x.as_str()) {
+        let before = text.clone();
+        text = set_top_level(&text, "head_name", &format!("{v:?}"));
+        if before != text {
+            note(&mut changed, "head_name");
         }
     }
 
@@ -191,8 +341,12 @@ pub fn apply(path: &Path, changes: &serde_json::Value) -> Result<Vec<String>, St
         }
     }
     if let Some(v) = changes.get("poll_interval").and_then(|x| x.as_u64()) {
+        // Refused here too, so a bad value cannot enter the file from the GUI even if the interface
+        // stops checking. The sentence is the same one the loader uses.
+        let v = crate::config::check_poll_interval(v)
+            .map_err(|e| format!("poll_interval: {e}"))?;
         let before = text.clone();
-        text = set_top_level(&text, "poll_interval", &v.max(1).to_string());
+        text = set_top_level(&text, "poll_interval", &v.to_string());
         if before != text {
             note(&mut changed, "poll_interval");
         }
@@ -353,6 +507,89 @@ pub fn target(cfg: &crate::config::Config) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_sink_block_round_trips_through_the_parser() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("c.toml");
+        std::fs::write(&f, "poll_interval = 30\n").unwrap();
+
+        let text = write_sink(
+            &std::fs::read_to_string(&f).unwrap(),
+            "ntfy",
+            &serde_json::json!({
+                "kind": "ntfy", "enabled": true, "url": "https://ntfy.example",
+                "topic": "frog", "token_env": "", "use_proxy": false
+            }),
+        );
+        assert!(text.contains("poll_interval = 30"), "top-level keys survive");
+        std::fs::write(&f, &text).unwrap();
+
+        let cfg = crate::config::load(Some(&f)).unwrap();
+        assert_eq!(cfg.sinks.len(), 1);
+        let s = &cfg.sinks[0];
+        assert_eq!(s.kind, "ntfy");
+        assert!(s.enabled);
+        assert_eq!(s.url, "https://ntfy.example");
+        assert_eq!(s.topic, "frog");
+    }
+
+    #[test]
+    fn a_disabled_route_stays_disabled_and_its_neighbour_is_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("c.toml");
+        std::fs::write(&f, "").unwrap();
+
+        let text = write_sink(
+            "",
+            "ntfy",
+            &serde_json::json!({ "kind": "ntfy", "enabled": true, "url": "https://n.example", "topic": "t" }),
+        );
+        let text = write_sink(
+            &text,
+            "webhook",
+            &serde_json::json!({ "kind": "webhook", "enabled": false, "url": "https://w.example" }),
+        );
+        assert!(text.contains("enabled = false"), "{text}");
+        std::fs::write(&f, &text).unwrap();
+
+        // Editing ntfy must not resurrect the webhook.
+        let text2 = write_sink(
+            &std::fs::read_to_string(&f).unwrap(),
+            "ntfy",
+            &serde_json::json!({ "kind": "ntfy", "url": "https://changed.example" }),
+        );
+        std::fs::write(&f, &text2).unwrap();
+        let cfg = crate::config::load(Some(&f)).unwrap();
+        let hook = cfg.sinks.iter().find(|s| s.kind == "webhook").unwrap();
+        assert!(!hook.enabled, "a disabled route must survive its neighbour being edited");
+        assert_eq!(hook.url, "https://w.example", "and keep its fields");
+        let n = cfg.sinks.iter().find(|s| s.kind == "ntfy").unwrap();
+        assert_eq!(n.url, "https://changed.example");
+        assert_eq!(n.topic, "t", "unset fields keep what they had");
+    }
+
+    #[test]
+    fn clearing_a_route_removes_only_that_block() {
+        let text = write_sink(
+            "",
+            "ntfy",
+            &serde_json::json!({ "kind": "ntfy", "url": "https://n.example", "topic": "t" }),
+        );
+        let text = write_sink(
+            &text,
+            "webhook",
+            &serde_json::json!({ "kind": "webhook", "url": "https://w.example" }),
+        );
+        let cleared = write_sink(&text, "ntfy", &serde_json::Value::Null);
+
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("c.toml");
+        std::fs::write(&f, &cleared).unwrap();
+        let cfg = crate::config::load(Some(&f)).unwrap();
+        assert_eq!(cfg.sinks.len(), 1);
+        assert_eq!(cfg.sinks[0].kind, "webhook");
+    }
 
     #[test]
     fn a_comment_survives_an_edit() {

@@ -22,10 +22,53 @@ fn is_healthy_state(s: &str) -> bool {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Event {
     pub title: String,
+    /// The machine a message is about, when it is about one. Empty for a service transition, which
+    /// names its node in the tags instead.
+    pub head: String,
     pub message: String,
     pub priority: i32,
     pub tags: Vec<String>,
     pub click: String,
+}
+
+/// The head's own death notice, in the three shapes the switch can produce.
+///
+/// Every title names the head, because several tails can each be announcing the same outage and the
+/// reader has to tell one event from three. The webhook also receives the name as its own field so a
+/// machine reading the JSON does not have to parse prose.
+pub fn watchdog_event(signal: &crate::watchdog::Signal, head_name: &str, why: &str, dashboard_url: &str) -> Event {
+    let (title, message, priority, tags) = match signal {
+        crate::watchdog::Signal::Down => (
+            format!("{head_name}: Observer Frog head is down"),
+            format!(
+                "{head_name} stopped accepting reports.\nLast failure: {why}\nNoticed by this machine, which reports to it."
+            ),
+            PRIORITY_OUTAGE,
+            vec!["rotating_light".to_string(), head_name.to_string()],
+        ),
+        crate::watchdog::Signal::Degraded => (
+            format!("{head_name}: Observer Frog head is up but not accepting reports"),
+            format!(
+                "{head_name} answered but refused this machine's report.\n{why}\nThat is usually a pairing or role problem, not an outage."
+            ),
+            3,
+            vec!["warning".to_string(), head_name.to_string()],
+        ),
+        crate::watchdog::Signal::Up => (
+            format!("{head_name}: Observer Frog head is back up"),
+            format!("{head_name} is accepting reports again."),
+            PRIORITY_RECOVERY,
+            vec!["white_check_mark".to_string(), head_name.to_string()],
+        ),
+    };
+    Event {
+        title,
+        head: head_name.to_string(),
+        message,
+        priority,
+        tags,
+        click: dashboard_url.to_string(),
+    }
 }
 
 /// Turn state transitions into human messages. First sightings never page.
@@ -46,6 +89,7 @@ pub fn events_from_changes(changes: &[Change], dashboard_url: &str) -> Vec<Event
         let count = silent.len();
         events.push(Event {
             title: format!("node {node} stopped reporting"),
+            head: String::new(),
             message: format!(
                 "{count} service(s) marked unavailable\nnode {node} · no report within {} intervals",
                 crate::silence::SILENCE_INTERVALS
@@ -65,6 +109,7 @@ pub fn events_from_changes(changes: &[Change], dashboard_url: &str) -> Vec<Event
         let node = &back[0].node_id;
         events.push(Event {
             title: format!("node {node} is reporting again"),
+            head: String::new(),
             message: format!("{} service(s) recovered on node {node}", back.len()),
             priority: PRIORITY_RECOVERY,
             tags: vec!["white_check_mark".into(), node.clone()],
@@ -87,6 +132,7 @@ pub fn events_from_changes(changes: &[Change], dashboard_url: &str) -> Vec<Event
             let suffix = if c.ignored { " (ignored)" } else { "" };
             events.push(Event {
                 title: format!("{} is down{}", c.name, suffix),
+                head: String::new(),
                 message: format!(
                     "{}\nnode {} · {}",
                     if c.detail.is_empty() { "no detail" } else { &c.detail },
@@ -100,6 +146,7 @@ pub fn events_from_changes(changes: &[Change], dashboard_url: &str) -> Vec<Event
         } else if c.is_recovery() {
             events.push(Event {
                 title: format!("{} recovered", c.name),
+                head: String::new(),
                 message: format!(
                     "{}\nnode {} · {}",
                     if c.detail.is_empty() { "healthy again" } else { &c.detail },
@@ -155,6 +202,7 @@ impl Digest {
                 .join(", ");
             return vec![Event {
                 title: format!("{} services recovered", items.len()),
+                head: String::new(),
                 message: names,
                 priority: PRIORITY_RECOVERY,
                 tags: vec!["white_check_mark".into()],
@@ -177,6 +225,7 @@ impl Digest {
         }
         vec![Event {
             title: format!("{} services down", outages.len()),
+            head: String::new(),
             message,
             priority: PRIORITY_OUTAGE,
             tags: vec!["rotating_light".into()],
@@ -279,6 +328,10 @@ pub fn publish_webhook(sink: &Sink, event: &Event, dashboard_url: &str) -> Resul
     }
     let body = serde_json::json!({
         "title": event.title,
+        // The head's name as its own field, not only inside the title: a receiver should not have
+        // to parse prose to learn which machine is talking. ntfy has no such field and gets it in
+        // the title, which is the one place the two encodings differ.
+        "head": event.head,
         "message": event.message,
         "priority": event.priority,
         "tags": event.tags,
@@ -332,6 +385,17 @@ impl Notifier {
         }
     }
 
+    /// An event that is not a service transition: the dead man's switch. Same digest, same limiter,
+    /// same routes, so a burst of outages is coalesced the same way a burst of service failures is.
+    pub fn submit_event(&mut self, event: Event) {
+        self.digest.add(event);
+    }
+
+    /// The dashboard url this notifier was built with, for events constructed outside it.
+    pub fn dashboard_url(&self) -> &str {
+        &self.dashboard_url
+    }
+
     /// Send everything buffered. Returns the events actually delivered.
     pub fn flush(&mut self, now: Option<f64>) -> Vec<Event> {
         let now = now.unwrap_or_else(|| {
@@ -362,6 +426,11 @@ impl Notifier {
         let sinks = self.sinks.clone();
         let topics = self.topics.clone();
         for sink in &sinks {
+            // A disabled route is configured but silent. Skipped here rather than filtered at
+            // load, so switching one on takes effect without touching the file again.
+            if !sink.enabled {
+                continue;
+            }
             if sink.kind == "ntfy" {
                 let topic = topics.get("ntfy").cloned().unwrap_or_else(|| sink.topic.clone());
                 match publish_ntfy(sink, &topic, event) {
@@ -470,6 +539,7 @@ mod tests {
         for i in 0..8 {
             d.add(Event {
                 title: format!("S{i} is down"),
+                head: String::new(),
                 message: "x".into(),
                 priority: PRIORITY_OUTAGE,
                 tags: vec![],
@@ -486,6 +556,7 @@ mod tests {
         let mut d = Digest::new();
         d.add(Event {
             title: "Only is down".into(),
+            head: String::new(),
             message: "b".into(),
             priority: PRIORITY_OUTAGE,
             tags: vec![],
@@ -516,7 +587,7 @@ mod webhook_tests {
     fn webhook_without_url_fails_cleanly() {
         let sink = Sink { kind: "webhook".into(), url: String::new(), ..Default::default() };
         let ev = Event {
-            title: "t".into(), message: "m".into(), priority: 4,
+            title: "t".into(), head: "H".into(), message: "m".into(), priority: 4,
             tags: vec![], click: String::new(),
         };
         assert!(publish_webhook(&sink, &ev, "http://d/").is_err());
@@ -556,6 +627,7 @@ mod webhook_tests {
         };
         let ev = Event {
             title: "Nginx is down".into(),
+            head: String::new(),
             message: "connection refused".into(),
             priority: 4,
             tags: vec!["rotating_light".into()],

@@ -578,6 +578,19 @@
     }
 
     .settings-panel[hidden] { display: none; }
+    /* One route, one card. A disabled route keeps its fields visible but read-only, so switching it
+       back on needs no retyping. */
+    .settings-subcard {
+      border: 1px solid var(--border-color, rgba(255,255,255,.08));
+      border-radius: 10px; padding: 12px; margin-bottom: 12px;
+      display: flex; flex-direction: column; gap: 10px;
+    }
+    .settings-route-head { display: flex; align-items: center; justify-content: space-between; }
+    .settings-route-body { display: flex; flex-direction: column; gap: 10px; }
+    .settings-route-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .settings-check { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
+    .settings-check input { width: 18px; height: 18px; }
+    .settings-route-body[hidden] { display: none; }
 
     .settings-card {
       background: var(--bg-card);
@@ -2150,7 +2163,8 @@
           <button class="settings-subtab" type="button" role="tab" data-subtab="services">Services</button>
           <button class="settings-subtab" type="button" role="tab" data-subtab="pairing">Pairing</button>
           <button class="settings-subtab" type="button" role="tab" data-subtab="access">Access</button>
-        </div>
+          <button class="settings-subtab" type="button" role="tab" data-subtab="notify">Notifications</button>
+          </div>
 
         <div class="settings-panel" data-panel="node">
         <div class="settings-card">
@@ -2320,6 +2334,14 @@
           </div>
         </div>
 
+        <div class="settings-panel" data-panel="notify" hidden>
+          <div class="settings-card">
+            <h2 class="settings-title">Notifications</h2>
+            <p class="settings-hint" id="notify-role-note"></p>
+            <div id="notify-routes"></div>
+          </div>
+        </div>
+
         <div class="settings-panel" data-panel="pairing" hidden>
         <div class="settings-card" id="pair-card">
           <h2 class="settings-title">Pairing requests</h2>
@@ -2431,7 +2453,7 @@
       const API_BASE = (window.location.pathname.replace(/\/$/, '') || '');
       // Bump on every shell change. Declared before first use: a `const` referenced above its
       // declaration throws a TDZ error and takes the whole script down (it did).
-      const BUILD = 'of-45';
+      const BUILD = 'of-46';
       // Show the address actually in use, not a baked-in host.
       (function () {
         const el = document.getElementById('brand-url');
@@ -3341,6 +3363,12 @@
           if (activeTab === 'settings' && !isFetching) {
             loadSettings();
             loadPairing();
+            // Route cards refresh on the same tick, but only while they are the visible sub-tab,
+            // and never while a field has focus: the guards inside buildRoutes handle the second
+            // half by only redrawing when the configuration actually differs.
+            if (document.querySelector('.settings-panel[data-panel="notify"]:not([hidden])')) {
+              buildRoutes(false);
+            }
             if (typeof loadNodes === 'function') loadNodes();
           }
           const isOfflineMode = elConnectionAlert.classList.contains('visible');
@@ -3704,6 +3732,176 @@
       // A tail asks; this list is the asking. Nothing is a credential until the tick is pressed,
       // which is the whole reason the request is shown rather than auto-accepted.
       let pairStamp = '';
+
+      // ---- Notifications tab ---------------------------------------------------------------
+      // One template, two routes. The fields differ by one (ntfy has a topic, a webhook does not);
+      // everything else, including the proxy default and the test button, is identical, because a
+      // second shape of settings does not earn its place.
+      const ROUTES = [
+        { kind: 'ntfy', label: 'ntfy', topic: true,
+          hint: 'Point this at an ntfy server you run. Leave the address empty to use ntfy.sh, which needs the internet and sends your service names to a third party.' },
+        { kind: 'webhook', label: 'Webhook', topic: false,
+          hint: 'Any URL that accepts a JSON POST. The body carries the title, the message, the priority and the head name.' },
+      ];
+      let notifyBuilt = false;
+
+      function routeCard(route, cfg) {
+        const id = 'route-' + route.kind;
+        const enabled = !!(cfg && cfg.enabled);
+        const dis = enabled ? '' : ' disabled';
+        return `
+          <div class="settings-subcard" id="${id}">
+            <div class="settings-route-head">
+              <label class="settings-check">
+                <input type="checkbox" id="${id}-enabled" ${enabled ? 'checked' : ''} />
+                <span>Send alerts through ${route.label}</span>
+              </label>
+            </div>
+            <div class="settings-route-body" id="${id}-body"${enabled ? '' : ' hidden'}>
+              <label class="settings-field">
+                <span>${route.kind === 'ntfy' ? 'Server address' : 'URL'}</span>
+                <input type="text" id="${id}-url" spellcheck="false"${dis}
+                  placeholder="${route.kind === 'ntfy' ? 'https://ntfy.example.net' : 'https://hooks.example.net/frog'}"
+                  value="${cfg ? String(cfg.url || '').replace(/"/g, '&quot;') : ''}" />
+              </label>
+              ${route.topic ? `<label class="settings-field">
+                <span>Topic</span>
+                <input type="text" id="${id}-topic" spellcheck="false"${dis}
+                  placeholder="observer-frog" value="${cfg ? String(cfg.topic || '').replace(/"/g, '&quot;') : ''}" />
+              </label>` : ''}
+              <label class="settings-field">
+                <span>Token environment variable (optional)</span>
+                <input type="text" id="${id}-token" spellcheck="false"${dis}
+                  placeholder="OF_NTFY_TOKEN" value="${cfg ? String(cfg.token_env || '').replace(/"/g, '&quot;') : ''}" />
+              </label>
+              <label class="settings-check">
+                <input type="checkbox" id="${id}-proxy" ${cfg && cfg.use_proxy ? 'checked' : ''}${dis} />
+                <span>Send through the proxy</span>
+              </label>
+              <p class="settings-hint" style="color: var(--down-color);">
+                Off by default on purpose. An alert routed through the proxy it is watching stays
+                silent during exactly the outage that matters.
+              </p>
+              <div class="settings-route-actions">
+                <button class="settings-btn" id="${id}-save" type="button"${dis}>Save</button>
+                <button class="settings-btn" id="${id}-test" type="button"${dis}>Send a test message</button>
+                <button class="settings-btn" id="${id}-clear" type="button">Clear</button>
+              </div>
+              <p class="settings-note" id="${id}-note"></p>
+            </div>
+            <p class="settings-hint">${route.hint}</p>
+          </div>`;
+      }
+
+      async function buildRoutes(force) {
+        const host = document.getElementById('notify-routes');
+        const note = document.getElementById('notify-role-note');
+        if (!host) return;
+        let d = {};
+        try { d = await (await fetch('api/settings', { cache: 'no-store' })).json(); } catch (_) {}
+        const isHead = !!d.serve;
+        // Head-only: a tail's services are already watched by the head, so a second notifier here
+        // would duplicate every message.
+        if (note) {
+          note.textContent = isHead
+            ? 'The head sees every machine, so this is the only place a route needs to exist.'
+            : 'This machine is a tail. Notifications belong to the head, which sees every machine\u2019s services. Turn on serving the dashboard to configure them here.';
+          note.style.color = isHead ? '' : 'var(--down-color)';
+        }
+        if (!isHead) {
+          host.innerHTML = '';
+          notifyBuilt = false;
+          return;
+        }
+        const sinks = Array.isArray(d.sinks) ? d.sinks : [];
+        const stamp = JSON.stringify(sinks);
+        if (!force && notifyBuilt && host.dataset.stamp === stamp) return;
+        // Rebuilding under a focused field would swallow what is being typed. The poll can wait.
+        if (!force && host.contains(document.activeElement) && document.activeElement.tagName === 'INPUT') {
+          return;
+        }
+        host.dataset.stamp = stamp;
+        host.innerHTML = ROUTES.map((r) => routeCard(r, sinks.find((s) => s.kind === r.kind))).join('');
+        notifyBuilt = true;
+        for (const route of ROUTES) wireRoute(route);
+      }
+
+      function wireRoute(route) {
+        const id = 'route-' + route.kind;
+        const note = (msg, bad) => {
+          const el = document.getElementById(id + '-note');
+          if (!el) return;
+          el.textContent = msg || '';
+          el.style.color = bad ? 'var(--down-color)' : '';
+        };
+        const val = (suffix) => (document.getElementById(id + '-' + suffix) || {}).value || '';
+        const tick = (suffix) => !!(document.getElementById(id + '-' + suffix) || {}).checked;
+
+        on(id + '-enabled', async () => {
+          const on_ = tick('enabled');
+          // Greyed, not deleted: unticking keeps every field so switching back on needs no retyping.
+          const body = document.getElementById(id + '-body');
+          if (body) {
+            body.hidden = !on_;
+            body.querySelectorAll('input').forEach((e) => { e.disabled = !on_; });
+          }
+          await saveRoute(route, note);
+        });
+
+        on(id + '-save', () => saveRoute(route, note));
+
+        on(id + '-test', async () => {
+          if (!tick('enabled')) { note('that route is switched off', true); return; }
+          const btn = document.getElementById(id + '-test');
+          if (btn) btn.disabled = true;
+          try {
+            const r = await fetch('api/notify/test', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ kind: route.kind }),
+            });
+            const d = await r.json().catch(() => ({}));
+            note(d.ok ? (d.detail || 'delivered') : (d.error || 'failed'), !d.ok && !r.ok);
+          } catch (e) { note('failed: ' + e, true); }
+          finally { if (btn) btn.disabled = false; }
+        });
+
+        on(id + '-clear', async () => {
+          const btn = document.getElementById(id + '-clear');
+          if (btn && btn.dataset.armed !== '1') {
+            btn.dataset.armed = '1';
+            btn.textContent = 'Press again to delete';
+            setTimeout(() => { btn.dataset.armed = '0'; btn.textContent = 'Clear'; }, 4000);
+            return;
+          }
+          await saveRoute(route, note, true);
+        });
+      }
+
+      async function saveRoute(route, note, clear) {
+        const id = 'route-' + route.kind;
+        const val = (s) => (document.getElementById(id + '-' + s) || {}).value || '';
+        const tick = (s) => !!(document.getElementById(id + '-' + s) || {}).checked;
+        try {
+          const r = await fetch('api/settings', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              sink: clear ? null : {
+                kind: route.kind,
+                enabled: tick('enabled'),
+                url: val('url'),
+                topic: route.topic ? val('topic') : '',
+                token_env: val('token'),
+                use_proxy: tick('proxy'),
+              },
+            }),
+          });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok || d.ok === false) { note(d.error || 'could not save that route', true); return; }
+          note(clear ? 'route removed' : (tick('enabled') ? 'saved' : 'saved and switched off'));
+          await buildRoutes(true);
+        } catch (e) { note('failed: ' + e, true); }
+      }
+
       async function loadPairing(force) {
         const list = document.getElementById('pair-list');
         if (!list) return;
@@ -4347,7 +4545,12 @@
       }
 
       document.querySelectorAll('.settings-subtab').forEach((b) => {
-        b.addEventListener('click', () => switchSettingsTab(b.dataset.subtab));
+        b.addEventListener('click', () => {
+          switchSettingsTab(b.dataset.subtab);
+          // Built on arrival rather than at boot: a tail has nothing to build, and the route cards
+          // need the current config, which the poll refreshes.
+          if (b.dataset.subtab === 'notify') buildRoutes(true);
+        });
       });
       try {
         const saved = localStorage.getItem('of-settings-subtab');

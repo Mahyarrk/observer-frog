@@ -18,8 +18,9 @@ dependency, a moving part, or an attack surface needs a reason stronger than "it
 | 0.3 | Install and autostart on macOS and Linux, Settings GUI, service RAM on cards, silence and 413 gates |
 | 0.4 | Role switching as a live setting, pairing with operator approval, one stable unit name, service discovery and add-from-panel |
 | 0.5 | Operator sign-in, listener identity, TLS upload from Settings, scheme discovery for pairing |
+| 0.6 | Notification routes in Settings (ntfy and webhook), a dead man's switch, bounded poll interval |
 
-0.5.0 is the current release. 126 tests, one source tree, macOS and Linux.
+0.6.0 is the current release. 140 tests, one source tree, macOS and Linux.
 
 ---
 
@@ -67,40 +68,34 @@ The plan, kept for the reasoning rather than as a task list: [PLAN-0.5.0.md](PLA
 
 ---
 
-## 0.6.0: notifications that reach you
+## 0.6.0: notifications that reach you (shipped)
 
-**Why:** the dashboard answers when you look at it. This is the version where it tells you without
-being asked.
+**Why it was next:** the dashboard answers when you look at it. This is the version where it tells you
+without being asked.
 
-### Scope
+### What landed
 
-- **Notification routes.** A section in Settings to pick one or several sinks. The operator decides
-  where an alert goes; nothing decides for them. Head-only: a tail's tab is greyed, because the head
-  already notifies on every machine's transitions.
-- **A dead man's switch.** A tail notices that its head stopped answering and says so. The ping is the
-  report it already sends; only the clock and the verdict are new. This is the one failure the head
-  cannot report about itself.
-- **PWA push.** VAPID key pair, a subscription table per device, a `push` handler in the service
-  worker, and an enable button in Settings. iOS requires the PWA installed to the home screen and a
-  trusted certificate, both of which 0.5.0 now provides. If it does not fit beside the two items above,
-  it moves to 0.7.0 rather than delaying them.
-- **ntfy stays.** It is self-hosted on the LAN and works with no internet at all. Push routes through
-  a vendor's servers and dies in an international cut. Both exist because they fail at different
-  times.
-- **Webhook stays.**
+- **Notification routes in Settings.** ntfy and webhook, one shape: a tick, an address, an optional
+  token variable, a proxy opt-in, and a test button that publishes through the real route code. Head
+  only; a tail's tab says why it is greyed.
+- **A disabled route is quiet, not absent.** Unticking keeps every field and stops sending. Clearing
+  deletes the block, and asks first.
+- **`enabled` is always written explicitly**, so a route the operator switched off can never be read
+  back as a pre-0.6.0 block and silently resurrected by the default.
+- **A dead man's switch.** A tail notices its head has stopped answering and says so once. The
+  heartbeat is the report it already sends. Three states, one message per transition, a fixed five
+  minute threshold, and a monotonic clock so a sleeping laptop does not alarm on waking.
+- **Bounded poll interval**, 15 to 60 seconds, refused rather than clamped. This is what lets the
+  threshold be a constant.
+- **The head hands its alert routes to tails** on every report answer, errors included, because the
+  cases that most need a message are the ones where the head is not serving.
 
-### Not in scope
+### Not in scope, and still not
 
-Per-service or per-severity routing. Digest and quiet hours. Telegram and SimpleX, in 0.7.0.
+Web push (VAPID, subscriptions, a service worker handler). Telegram and SimpleX. Per-service or
+per-severity routing. Digest and quiet hours. A watchdog for a single-machine install.
 
-### Done when
-
-- A service going down produces exactly one push, not one per service on the node.
-- The same event also reaches ntfy when both are enabled, with the silence rules intact.
-- A cut test: with the internet down, push fails and ntfy still delivers on the LAN.
-- Toggling a route in Settings takes effect without a restart.
-
-The detailed plan lives in [PLAN-0.6.0.md](PLAN-0.6.0.md).
+The plan, kept for the reasoning rather than as a task list: [PLAN-0.6.0.md](PLAN-0.6.0.md).
 
 ---
 
@@ -111,6 +106,12 @@ The detailed plan lives in [PLAN-0.6.0.md](PLAN-0.6.0.md).
 - **Telegram sink**, through the existing per-sink `use_proxy`. The field has been in the config
   since 0.2 and has had no sink that needs it.
 - **SimpleX sink**, for the same reason: it is the one the operator already runs.
+- **Both arrive on the shape 0.6.0 established**: a `[[sink]]` block, a card in the same template, an
+  `enabled` tick and a test button. A route that needs a different settings shape needs an argument
+  first.
+- **Web push**, if it does not fit beside the platform work: VAPID key pair, a subscription table per
+  device, a `push` handler in the service worker, and an enable button. It is the only route that
+  reaches a phone without a third-party relay or a server the operator runs.
 - **Metrics graphs.** The data is already there: `hourly_rollup` keeps 30 days of up/down/degraded
   counts and latency sums. This is frontend work over an existing table, not new collection.
 - **Windows.** The first honest attempt at autostart (Task Scheduler). Until this lands, `install`
@@ -127,7 +128,8 @@ The detailed plan lives in [PLAN-0.6.0.md](PLAN-0.6.0.md).
 
 ### Done when
 
-- Each sink can be enabled and disabled alone, and a failure in one does not suppress another.
+- Each route can be enabled and disabled alone, and a failure in one does not suppress another. This
+  is already true of the two that shipped; the new ones inherit it rather than re-earning it.
 - Graphs render 30 days of uptime and latency without a new query pattern.
 - Windows: the binary installs, starts at login, and survives a reboot.
 - Ubuntu and Arch: same, each on a real install (not a Debian box wearing the name), including a
