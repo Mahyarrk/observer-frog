@@ -52,7 +52,32 @@ pub fn build(cfg: &Config, poller_ref: Arc<Mutex<Option<Arc<poller::Poller>>>>) 
     app
 }
 
-pub fn run(cfg: Config, config_path: Option<PathBuf>, tls: Option<(PathBuf, PathBuf)>) -> i32 {
+pub fn run(mut cfg: Config, config_path: Option<PathBuf>, tls: Option<(PathBuf, PathBuf)>) -> i32 {
+    // Ask the machine what it runs, before anything is built from the config.
+    //
+    // This lived only in `tail::run`, the one-shot reporter, so a served node with `discover = true`
+    // and no service list discovered nothing: it polled zero services, and because an empty payload
+    // is skipped (I3) it never sent a report, so it could not even reach the 401 that starts
+    // pairing. A fresh machine therefore had no way to enrol itself, which is the exact case a tail
+    // on a new box is. Doing it here covers every path that serves.
+    if cfg.discover && cfg.services.is_empty() {
+        match crate::catalog::load(None) {
+            Ok(entries) => {
+                let found = crate::discover::discover(&entries, "127.0.0.1");
+                if found.is_empty() {
+                    eprintln!("  discovered nothing; no catalog service is listening here");
+                } else {
+                    eprintln!("  discovered {} service(s) on this machine:", found.len());
+                    for s in &found {
+                        eprintln!("    {:<16} {}", s.id, s.target);
+                    }
+                }
+                cfg.services = found;
+            }
+            Err(e) => eprintln!("  cannot load the catalog, no discovery: {e}"),
+        }
+    }
+
     let watcher_holder: Arc<Mutex<Option<Watcher>>> = Arc::new(Mutex::new(
         Watcher::new(config_path.as_deref().or(cfg.path.as_deref())).ok(),
     ));
