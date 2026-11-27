@@ -2453,7 +2453,7 @@
       const API_BASE = (window.location.pathname.replace(/\/$/, '') || '');
       // Bump on every shell change. Declared before first use: a `const` referenced above its
       // declaration throws a TDZ error and takes the whole script down (it did).
-      const BUILD = 'of-46';
+      const BUILD = 'of-47';
       // Show the address actually in use, not a baked-in host.
       (function () {
         const el = document.getElementById('brand-url');
@@ -3860,7 +3860,9 @@
               body: JSON.stringify({ kind: route.kind }),
             });
             const d = await r.json().catch(() => ({}));
-            note(d.ok ? (d.detail || 'delivered') : (d.error || 'failed'), !d.ok && !r.ok);
+            // Success is coloured as a caution when the far end only "accepted" it: green here would
+            // imply a phone buzzed, and only the operator can confirm that.
+            note(d.ok ? (d.detail || 'the server accepted it') : (d.error || 'failed'), !d.ok);
           } catch (e) { note('failed: ' + e, true); }
           finally { if (btn) btn.disabled = false; }
         });

@@ -188,6 +188,11 @@ proxy opt-in. ntfy also has a topic.
 **Send a test message** publishes through the real route code, so a test that succeeds means
 production will. It only appears on a route that is switched on.
 
+What it proves, and what it cannot: a success means the ntfy server took the message. It does not
+mean a device received it, because nothing in the protocol reports subscribers. If nothing appears on
+your phone, the topic on this page does not match the one your app is subscribed to. That is the
+first thing to check, and it is the most common mistake.
+
 Unticking a route keeps everything you typed and simply stops sending. **Clear** deletes the block,
 and asks twice.
 

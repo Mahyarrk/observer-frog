@@ -1072,7 +1072,14 @@ fn route(
             };
             match result {
                 Ok(code) => (200, json_ct, json_bytes(&json!({
-                    "ok": true, "detail": format!("delivered, the far end answered {code}"),
+                    // Honest about what the answer proves. A 200 means the server took the message;
+                    // nothing here can know whether a device is subscribed, and a person reading
+                    // "delivered" would assume their phone buzzed.
+                    "ok": true,
+                    "accepted": true,
+                    "detail": format!(
+                        "the server accepted it ({code}). If nothing appeared on your phone, check that the topic matches what your app is subscribed to."
+                    ),
                 })), false),
                 Err(e) => (502, json_ct, json_bytes(&json!({"ok": false, "error": e})), false),
             }
