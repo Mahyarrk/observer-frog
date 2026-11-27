@@ -6,14 +6,17 @@ A third machine joins the fleet, and the first one nobody is sitting in front of
 software running somewhere with no GUI, no desktop session, and no operator watching it boot.
 The code should not care. The proving of it will find where it does.
 
-## The three orders
+## The orders, restated
 
 1. observer-frog works on the Ubuntu server.
-2. Install the lighter parts of the catalog there, and prove each one reads `up`.
-3. Pair the Ubuntu box as a tail under the laptop head.
+2. **Everything the laptop runs, miix runs.** Not a curated subset — the whole inventory, so the
+   two Linux boxes become comparable machines.
+3. **v2rayA tested on both**, without disturbing the laptop's Xray.
+4. **Sunshine Linux tested on both**, as a catalog entry.
+5. Pair miix as a tail under the laptop head.
 
-Orders 1 and 3 are code work. Order 2 is mostly installation, and it is the only order that
-can fail for reasons that are not ours.
+Orders 1 and 5 are code work. Order 2 is installation. Orders 3 and 4 need care, because both
+touch running systems and one of them can break the laptop's proxy path.
 
 ## What is already known about the target
 
@@ -24,7 +27,7 @@ host       miix320            the Atom x5-Z8350 2-in-1, not the Surface
 cpu        Intel Atom x5-Z8350 @ 1.44GHz    4 cores
 os         Ubuntu 26.04.1 LTS               kernel 7.0.0-30-generic
 arch       x86_64
-ram        3537 MB                          3773 MB swap
+ram        3454 MB      2954 MB available   0 MB swap in use
 disk       19 GB free of 27 GB
 glibc      2.43
 systemd    259 (259.5-0ubuntu3.4)
@@ -33,184 +36,226 @@ ssh        key ~/.ssh/mahyar_miix, the existing `miix` alias
 toolchain  no rustc, no gcc, python 3.14.4, curl, no docker
 linger     Linger=no                          user manager running
 listening  ssh only
+dri        /dev/dri/card1 + renderD128       i915, cgroup v2
+display    no X server, no Wayland           headless
 ```
 
 No compiler on the box settles how this ships: **build on the laptop, copy the binary.**
 A build-from-source plan would mean installing a Rust toolchain and a linker on a 4 GB Atom
 to produce a binary the laptop can already produce in ninety seconds.
 
-Ubuntu 26.04 is much newer than Debian 13's glibc 2.41. That direction is the safe one: a
-binary built on the laptop runs on the Ubuntu box, and a binary built on the Ubuntu box may
-refuse to start on the laptop. **Build order therefore matters and is fixed: build on the
-laptop, deploy outward.** It is the same rule that already governs the Mac-to-laptop path.
+Ubuntu 26.04's glibc is much newer than Debian 13's 2.41. That direction is the safe one: a
+binary built on the laptop runs on miix, not necessarily the reverse. **Build order is fixed:
+laptop first, deploy outward.** Same rule that already governs the Mac-to-laptop path.
 
-## The finding that shapes this version
+## What "everything the laptop runs" means
 
-**The head has never served two tails.**
+The laptop's real inventory, split by unit scope:
 
-`status.db` on the laptop holds one row in `nodes` — `MacM4`. The `service_state` table carries
-a second `node_id`, `watchdog`, but that is from earlier testing and no node row backs it.
+**System units**
 
-Every assumption about multi-node operation is therefore untested: that two tails reporting on
-different intervals do not overwrite each other, that the dashboard's node selector stays
-correct, that silence detection is per-node rather than global, that the dead man's switch in
-one tail does not fire because a different tail is late, and that the pairing table tolerates a
-second request without disturbing the first.
+```
+9router     ntfy        searxng      smp-server   syncthing@mahyar
+tailscaled  tun2socks   vocechat     xftp-server  xray        xray-watchdog
+```
 
-This gets its own work package, and it runs **before** the Ubuntu pairing. Proving two tails
-work is worth more than proving Ubuntu works, because the Ubuntu box is only interesting as
-the second tail.
+**User units**
 
-## A second finding, smaller
+```
+observer-frog   osiris   status-node   terraria-server   vaultwarden
+```
 
-`expected_off` has been in the config since 0.5.0 and **no catalog entry uses it.**
+Not all of this goes on miix. Three catalog entries are not portable at all, and two services
+are deliberate judgement calls:
 
-That field exists for software installed but normally not running, and it has never been
-exercised because every machine so far runs everything it has installed. A server is the first
-place where that is untrue — software gets installed for a purpose and left stopped until the
-purpose arrives. This version is where the field either proves itself or gets deleted.
+| Entry | Decision | Why |
+|---|---|---|
+| `lmstudio` | exclude | macOS and Windows only |
+| `hermes-desktop` | exclude | macOS bundle path, documented in the entry |
+| `9router` | exclude | a second router in front of the same model backend is not a comparison |
+| `status-node` | exclude | laptop-specific telemetry, superseded by observer itself |
+| `hermes` | excluded by omission | the agent is not a catalog service; its API is |
 
-## What "lighter parts" has to mean
+Everything else gets installed, `terraria` included — it is 60 MB and idle, and "everything the
+laptop runs" was the order.
 
-The target is an Atom x5-Z8350: four slow cores, 3.5 GB of RAM, 19 GB of disk, and 3.7 GB of
-swap already in use as a cushion. That is a machine that will accept nearly any single one of
-these services and object to several at once. The light set is therefore sequenced, not
-parallel: install one, watch what it costs, keep it only if the cost is small. `n8n` failed on
-the Debian laptop for exactly this reason — a native build pegged the CPU until SSH stopped
-answering — so the same caution applies here and the measurement is not optional. The catalog also contains three entries that **cannot run on Ubuntu at all**:
+**The measured cost case, and where it actually bites.** miix has 2.9 GB free; the laptop has
+1.6 GB. RAM is not the constraint — the laptop is the more loaded machine. **CPU is.** Four
+Atom cores at 1.44 GHz is a different class from the laptop's Celeron N3350, and `n8n` failed on
+the laptop precisely by pegging the CPU until SSH stopped answering. So the sequence is install
+one, measure, keep it only if the cost is small. The measurement is not optional.
 
-| Entry | Why not |
-|---|---|
-| `lmstudio` | macOS and Windows only |
-| `hermes-desktop` | macOS bundle path (documented in the entry itself) |
-| `sunshine` | wants a GPU and a display session, not a headless server |
+**The heaviest single item** is searxng at ~240 MB resident plus a Python venv. It goes in
+last, after everything else is proven, so a failure there is unambiguous.
 
-None of these need code. Discovery already reports an entry as not-found rather than dangling it
-in front of the user — proven on the laptop in the last version — so the correct handling is to
-leave them alone and record the exclusion here.
+## Order 3: v2rayA, and the collision
 
-The rest, sorted by how well they fit a headless server:
+**This is the part that can break the laptop, so it is designed defensively.**
 
-**Fits cleanly, install and test:**
+The laptop does not run v2rayA. It runs **Xray**, holding:
 
-- `nginx` — apt, the oldest package on the box, http 80
-- `syncthing` — apt, http 8384
-- `ssh` — already present, tcp 22
-- `ntfy` — single static binary, http 2586
-- `vocechat` — single static binary, http 3009
-- `vaultwarden` — single static binary, https 8443; the only catalog entry that proves the
-  TLS probe path on a non-Mac host
-- `smp`, `xftp` — single static binaries, tcp 5223/5224; the tcp path
-- `osiris` — binary, http 3008
-- `searxng` — Python venv, http 8080. Remembered cost on the Debian laptop is ~240 MB resident.
-  On a 3.5 GB Atom that is affordable alone and questionable next to everything else, so it is
-  installed **last** and measured before anything else is added on top of it. If it does not fit,
-  it comes out and the exclusion gets written down.
+```
+20171  HTTP   ← xray.service
+20170  SOCKS  ← xray.service
+```
 
-**Installs and proves a probe without needing the service configured:**
+v2rayA's proxy defaults are those same two ports. They do not collide *at the listener* —
+v2rayA binds 20170/20171 only once an outbound is connected, which is why it can be installed
+and probed beside another proxy. They collide **the moment a v2rayA node is connected on the
+laptop**, and that would take the proxy out from under `tun2socks` and therefore under SearXNG
+and anything else routing through Xray.
 
-- `wireguard` — apt installs it, and `ip link add wg0 type wireguard` creates the interface with
-  no peer and no config. This is the honest way to test the kernel-driver signal on Linux
-  without building a tunnel that serves no purpose.
+The rules, therefore:
 
-**Deliberately excluded:**
+- **miix first.** It has nothing on 2017, 20170 or 20171. Install v2rayA there, point it at a
+  subscription, connect a node, let it have the default ports. That is the real test of the
+  catalog entry and it costs nothing.
+- **The laptop gets v2rayA installed and its UI probed on a non-default port** —
+  `v2raya --lite -a 0.0.0.0:2018` — and **no node is ever connected there.** Connecting one is
+  the action that moves the proxy ports, so it does not happen. The entry is proven by the
+  admin UI answering on 2018; the proxy path stays Xray's.
+- **Before and after every laptop step**, capture `ss -lnt` and confirm 20170/20171 still belong
+  to the same process and `curl` through 20171 still answers. If that check ever fails,
+  `systemctl stop v2raya` and Xray is untouched.
+- **Never run v2rayA as root on the laptop.** `--lite` is implied for a non-root user and keeps
+  the config under the home directory, so it cannot rewrite anything system-wide.
 
-- `docker`, `portainer` — heavy, root, and a second container runtime is not "lighter parts"
-- `ollama` — models are measured in gigabytes
-- `9router`, `hermes` — both already run on the laptop; a second instance proves nothing about
-  Ubuntu and duplicates an agent
-- `terraria` — a game server is not light, and nothing is playing it
-- `tailscale` — joins his tailnet as a third node. Needs a decision, not a default. If it goes
-  in, it is his call and after the pairing works.
+The whole safety argument in one sentence: the dangerous action is *connecting a node*, and the
+plan never takes it on the laptop.
 
-**Two probe kinds with no catalog entry at all:** `file_age` and `file_json` exist in the code
-and are used by nobody. They cannot be exercised by installing catalog software, so a service
-of his own — a file that must stay fresh — is the only way to prove them on Ubuntu. That is one
-small work package, and it is the same class of check that caught the WireGuard fault.
+## Order 4: Sunshine on Linux
+
+Sunshine is not in the Ubuntu archives, so both machines get it from the upstream release
+tarball. It installs and runs on Linux; what it cannot do here is **capture**.
+
+Upstream is explicit: *"Only X11 and Wayland capture are supported."* Both machines are
+headless with no display server. `/dev/dri` exists on both (`i915`), so the binary should start
+and bind its web UI — which is exactly what the catalog entry probes (tcp 47990). It will
+report **up** while being unable to stream a desktop.
+
+That distinction is real and the entry's `notes` must say so, or the next person trusts a green
+light that means less than it appears to. **The entry earns its place on the port signature
+alone**; the honest note is what keeps it from lying.
+
+Two things to settle during the work, not before:
+
+- whether Sunshine binds 47990 or exits when capture fails at startup. If it exits, the entry
+  reads `down` and the note becomes "starts only with a display server", which is also honest.
+- whether miix's i915 does VAAPI encode. If it does not, Sunshine is a web UI and nothing more
+  on this hardware.
+
+Sunshine on the **Mac** is untouched — it runs there already and its entry is proven.
 
 ## Work packages
 
 ### WP1: a third tail does not disturb the first
 
-Before touching the Ubuntu box, prove the head handles two. A second scratch tail on the laptop
-reporting to the live head, with a distinct node id, on its own interval. Then check:
+Before touching miix, prove the head handles two. A second scratch tail on the laptop reporting
+to the live head, distinct node id, own interval. Then check:
 
-- both nodes stay in `nodes`, each with its own `last_seen_ts`
+- both nodes in `nodes`, each with its own `last_seen_ts`
 - `service_state` keeps them separate; one node's silence does not grey the other
 - the dashboard lists two and the selector switches between them
 - silence detection is per-node: stopping the scratch tail must not mark `MacM4` stale
-- the dead man's switch in the scratch tail does not fire on the first tail's behalf
+- the scratch tail's dead man's switch does not fire on the first tail's behalf
 
 The last one is the one I expect to find something in.
 
 ### WP2: run it on Ubuntu
 
-- copy the already-built laptop binary; there is no toolchain on the box and none is going on it
-- confirm it starts at all before configuring anything: `--version`, then `discover`. A binary
-  that dies on a missing glibc symbol dies here, which is the cheapest place to find out
-- `observer-frog install` as a **user** unit; confirm no root is needed for anything except apt
-- `loginctl enable-linger mahyar` so the unit survives logout — the same requirement the laptop
-  already has, and easy to forget on a fresh box
-- verify: metrics read correctly from `/proc`, the device card names Ubuntu not Linux, a process
-  probe works, an interface probe works, `ss -lntH` parsing works
-- verify discovery recognises at least three catalog entries by signature
+- copy the laptop's built binary; no toolchain goes on the box
+- `--version`, then `discover`, before any config — a missing glibc symbol dies here, the
+  cheapest place to find out
+- `observer-frog install` as a **user** unit; nothing needs root except apt
+- `loginctl enable-linger mahyar` — the laptop needs this too and it is easy to forget
+- verify: `/proc` metrics, the device card naming Ubuntu rather than Linux, a process probe,
+  an interface probe, `ss -lntH` parsing
+- verify discovery recognises at least three entries by signature
 
-The known risk here is small: the Linux paths were written against Debian and are `/proc`-based,
-so Ubuntu 26.04 should behave identically. "Should" is why WP2 exists.
+The risk is small: the Linux paths were written against Debian and are `/proc`-based, so Ubuntu
+26.04 should behave identically. "Should" is why WP2 exists.
 
-### WP3: install and prove the light set
+### WP3: the laptop's inventory, on miix
 
-Per service, in order of increasing difficulty: install, start, confirm discovery finds it by
-signature, add it, confirm the dashboard reads `up`, then stop it and confirm `down`. A service
-that reads `up` while stopped is worse than one that never appears.
+Install in ascending order of risk, measuring after each:
 
-`vaultwarden` is the important one: it is the only entry that proves `scheme = "https"` on a
-machine that is not the Mac.
+1. `ssh` (present), `nginx`, `syncthing`, `wireguard` (+ `ip link add wg0 type wireguard`)
+2. `ntfy`, `vocechat`, `vaultwarden`, `smp`, `xftp`, `osiris`
+3. `terraria`, `tailscaled`, `tun2socks` if the WG path is to mirror the laptop's
+4. `searxng` last, with its venv, measured before anything is stacked on top
 
-### WP4: the two unused probe kinds
+Per service: install, start, confirm discovery finds it **by signature**, add it, confirm `up`,
+stop it, confirm `down`. A service that reads `up` while stopped is worse than one that never
+appears.
 
-One `file_age` service and one `file_json` service in the Ubuntu config, pointed at files that
-exist. Proves both paths on Linux, and settles whether they earn their keep.
+`vaultwarden` is the important one — the only entry proving `scheme = "https"` off the Mac.
 
-### WP5: pair Ubuntu as a tail
+### WP4: v2rayA, in the safe order
 
-Leave the laptop as head, untouched. Pair the Ubuntu box the normal way: it proposes a token,
-the head approves. Then confirm:
+Separated from WP3 because it is the one that can damage a running system.
 
-- the Ubuntu node appears in the dashboard with its own services
-- the Mac tail and the Ubuntu tail are both green at once, with the Mac's thirty services intact
-- stopping the Ubuntu unit produces a `down` notification naming the Ubuntu node, and only that
-- the dead man's switch on the Ubuntu tail names the laptop as the head
+- **miix:** install, `--lite`, default ports, connect a node, verify the UI on 2017 and the
+  proxy answering on 20171. Add the entry, confirm `up`.
+- **laptop:** snapshot `ss -lnt`; install; `-a 0.0.0.0:2018`; probe the UI; **connect nothing**;
+  re-snapshot and confirm 20170/20171 still belong to the same process; confirm
+  `curl -x http://127.0.0.1:20171` still reaches the internet. Then stop it and leave Xray as
+  the only proxy, which is the current state.
+- If any step makes 20171 stop answering, `systemctl stop v2raya` immediately and re-verify.
 
-### WP6: documents
+### WP5: Sunshine Linux on both
 
-`ROADMAP.md` gains the 0.6.1 row. `GUIDE.md` gains a Ubuntu section, short: what to install,
-what needs root, what does not. `README.md`'s opening currently says "a Mac and a small Debian
-box"; three machines make that line wrong.
+- install from upstream on both machines
+- confirm it binds 47990; if it refuses to start without a display, record that instead
+- the entry stays `tcp 47990`, with the note corrected to say what it actually proves
+- explicitly do **not** add a display server to either box to make streaming work
+
+### WP6: the two unused probe kinds
+
+One `file_age` and one `file_json` service in the miix config, pointed at files that exist.
+Proves both paths on Linux and settles whether they earn their keep. Same class of check that
+caught the WireGuard fault.
+
+### WP7: pair miix as a tail
+
+Laptop stays head, untouched. miix proposes a token, the head approves. Then:
+
+- the miix node appears with its own services
+- Mac tail and miix tail both green at once, Mac's services intact
+- stopping the miix unit produces a `down` naming the miix node, and only that
+- the miix dead man's switch names the laptop as the head
+
+### WP8: documents
+
+`ROADMAP.md` gains the 0.6.1 row. `GUIDE.md` gains a Ubuntu section: what to install, what needs
+root, what does not, and the v2rayA port warning. `README.md`'s opening says "a Mac and a small
+Debian box"; three machines make that wrong.
 
 ## What I need from you
 
-1. **The sudo password for the Ubuntu box**, or you run the apt commands yourself and I do the
-   rest. Nothing else in this plan needs root. Everything in WP2, WP4 and WP5 runs as `mahyar`.
-2. **Whether Tailscale joins as a third node.** Default is no.
+1. **The sudo password for miix**, or you run the apt commands and I do the rest. WP2, WP6 and
+   WP7 need no root at all.
+2. **Tailscale on miix: yes or no.** Plan assumes yes now that miix is a real node.
+3. **A v2rayA subscription for miix.** The Mac has one; miix needs its own or a share of it.
 
 ## Tests I will do, and tests you must do
 
-I will: every work package's verification, on both machines, with the output pasted.
+I will: every work package's verification on all three machines, with output pasted.
 
 You must:
 
-- install the PWA on a phone and confirm three nodes render, if the selector changes
-- confirm a real notification arrives on the phone when the Ubuntu tail stops — the one claim
-  this project has never proven for any machine
-- confirm the Ubuntu box reboots with the unit up and unsupervised, which is the entire point of
-  a headless tail
+- confirm the PWA renders three nodes on your phone
+- confirm a real notification arrives when the miix tail stops — the one claim this project has
+  never proven for any machine
+- confirm miix reboots with the unit up and unsupervised — the whole point of a headless tail
+- confirm Moonlight still works against the Mac, if Sunshine Linux turns out to matter
 
 ## Not in this version
 
-- Windows. Still no machine, so still no proof.
-- The `docker` Linux process name. It stays a known gap; `dockerd` is unverified and guessing
+- **Windows.** Still no machine, so still no proof.
+- **The `docker` Linux process name.** Stays a known gap; `dockerd` is unverified and guessing
   process names is how the WireGuard note went wrong.
-- Any new sink. 0.7.0 owns Telegram and SimpleX.
-- CI. One Ubuntu box tested by hand is evidence; a workflow written without a second Linux
-  machine to run it on is decoration.
+- **A display server on either Linux box.** Sunshine's capture limitation is recorded, not
+  worked around.
+- **Any new sink.** 0.7.0 owns Telegram and SimpleX.
+- **CI.** One Ubuntu box tested by hand is evidence; a workflow with no second Linux machine to
+  run it on is decoration.
