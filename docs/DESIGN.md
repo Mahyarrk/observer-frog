@@ -46,6 +46,18 @@ bug. Decide which, then fix it here in the same commit.
     a name a restart cannot find. Legacy `-head` and `-tail` units are retired on install.
 16. **Two listeners, one state.** The dashboard port and the report port can serve at the same time
     from the same process and the same database.
+17. **A version never changes a setting.** This holds for every part of the operator's configuration,
+    not only notifications. A new setting ships with a default that reproduces the previous behaviour;
+    an existing value is read as written and left alone. An upgrade that re-enables a route the
+    operator switched off, resets an interval, or rewrites a chosen value has taken a decision that
+    was not its to make. Where a default and an existing behaviour disagree, the existing behaviour
+    wins.
+18. **Bounded intervals.** `poll_interval` is 15 to 60 seconds. Outside that range is refused with a
+    reason, never silently clamped, because a clamp hides a disagreement between the file and the
+    behaviour. The bound is what lets the dead man's switch use a fixed 300 s threshold.
+19. **An alert channel is a second egress.** It is the only path this program has that speaks to a
+    third party, and it names every service. Every route is opt-in, off by default, and never routed
+    through the proxy it is watching unless the operator says so.
 
 ## Discovery and pairing
 
@@ -63,6 +75,12 @@ interface matters.
 An instance never lists itself as a head to pair with. Results are keyed on the responder's address
 rather than its URL, because every node advertises the same wildcard URL.
 
+The advertisement also carries `dashboard_tls` and `dashboard_port`, so a tail never guesses a scheme.
+Pairing is addressed to the **dashboard** listener, not the report port: the report port answers only
+`/api/report`, so a request sent there returns 404 and reads like a broken head. When the scheme is
+unknown anyway, it is discovered by asking the listener rather than assumed, because plain HTTP sent to
+a TLS port comes back as a TLS alert that looks like a network fault.
+
 Pairing is an approval flow, not a token handoff. A tail proposes a token; the head stores only its
 digest and shows the request with a tick and a cross. Nothing is trusted until a human clicks, which
 is what makes the routes safely unauthenticated: the proposed token is not a credential yet.
@@ -72,6 +90,47 @@ is what makes the routes safely unauthenticated: the proposed token is not a cre
   `enrol`, and a removed machine does not re-ask on its own, because removal is a decision.
 - When a node stops acting as head it drops every other machine: roster, history, enrolment. That
   is a real unpairing, not a pause.
+
+## The dead man's switch
+
+A node that reports can tell when its head stops answering, and that is the one failure a head cannot
+report about itself. The heartbeat is the report it already sends: a 200 is proof of life, and nothing
+new is polled.
+
+Three states, and each transition sends at most one message.
+
+| From | Observed | Message | To |
+|---|---|---|---|
+| Routine | 200 | none | Routine |
+| Routine | any non-200 answer | degraded, once | Waiting |
+| Routine | silence past the threshold | down | Armed |
+| Armed | 200 | up | Routine |
+| Armed | any non-200 answer | degraded, once | Waiting |
+| Waiting | 200 | up | Routine |
+| Waiting | any non-200 answer | none | Waiting |
+| Waiting | silence past the threshold | down | Armed |
+
+**Only a 200 is up.** A 401, 403, 413 or 503 proves the head is alive and refusing, which is a
+different fault with a different fix, so it is degraded rather than down. Treating any answer as up
+would let a permanently refusing head look healthy forever.
+
+**A recovery must be observed.** A head that returns and dies inside the threshold was never up, and
+an alarm that clears on a brief flicker is worse than no alarm.
+
+**The clock is monotonic.** Wall clock across a suspend produces a gap indistinguishable from an
+outage, so a sleeping laptop would wake into a false alarm every time.
+
+**The threshold is fixed at 300 s** and the poll interval is bounded 15 to 60 s, so the worst case is
+five missed pings. Neither number is derived from the other, which is what keeps the rule readable.
+
+**A head-only install has no switch.** Nothing outside the process survives the process dying, and a
+watchdog beside the thing it watches is decoration. The limitation is stated in the UI rather than
+left to be discovered during an outage.
+
+The alert endpoint reaches a tail in the report response, on error responses as well as successful
+ones, because the cases that most need a message are the cases where the head is not serving. The
+token environment variable does not travel: it names a variable on the head, and the same name on
+another machine is either absent or a different secret.
 
 ## Payload contract
 
@@ -125,9 +184,17 @@ Each has a test named after it. Numbers follow the original handoff so cross-ref
 - **I5** `ignored` services still alert on transitions but are excluded from uptime, MTTR,
   worst-uptime and `incidents_30d`.
 - **I6** The ignored flag is read at serve time, never baked into the snapshot.
-- **I7** ntfy publishes with headers (`X-Title`, `X-Priority`, `X-Tags`) and a plain-text body.
+- **I7** Every route renders the same `Event`. ntfy sends it as headers (`X-Title`, `X-Priority`,
+  `X-Tags`) with a plain-text body; a webhook sends it as JSON with the head's name in its own
+  `head` field. One event, two encodings, no route-specific content.
+- **I7a** One rule for every route. ntfy, webhook and whatever follows share one `[[sink]]` shape,
+  one Settings card, one test button, one rate limiter and one proxy default. A route that needs a
+  different settings shape needs an argument first.
+- **I7b** A disabled sink is quiet, not absent. `enabled = false` stops publishing and greyes the
+  card while preserving every field. Clearing the block is a separate, deliberate action.
 - **I8** No notifier goes through the monitored proxy; per-sink `use_proxy` overrides this once a
-  sink genuinely needs one.
+  sink genuinely needs one. The default is off, because an alert routed through the thing being
+  watched is silence during the outage that matters.
 - **I9** Self-monitoring starts only after the socket is bound.
 - **I12** One process snapshot per wave, mapped per service; never block the poller on file parsing;
   cache file metadata by `st_mtime`.
@@ -182,7 +249,8 @@ observer-frog/
   index.html          single-file UI (CSS and JS inline, manifest as a data URI)
   sw.js               service worker
   manifest.json       PWA manifest
-  rust/src/           one crate: server, poller, probes, state, db, catalog, discover, install
+  rust/src/           one crate: server, poller, probes, state, db, catalog, discover, install,
+                      auth, pair, notify, watchdog
   catalog/            shipped service definitions (data, not code)
-  docs/               this file, the guide, the roadmap
+  docs/               this file, the guide, the roadmap, per-version plans
 ```

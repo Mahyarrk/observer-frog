@@ -71,6 +71,11 @@ one that speaks to a third party.
     settings shape is a route that needs its own justification.
 12. **A sink gains `enabled`.** Today presence means active, so unticking a route would have to delete
     the operator's URL and topic. A field keeps their work while switching the route off.
+13. **An upgrade never changes a setting.** This is a rule for the whole program, not for sinks. A
+    version that turns a route back on, resets an interval, re-enables a service, or rewrites a value
+    the operator chose has taken something from them without asking. New settings ship with defaults
+    that match the previous behaviour; existing values are read as they are and left alone. Where a
+    default and an existing behaviour disagree, the existing behaviour wins.
 
 Measured, not guessed:
 
@@ -237,8 +242,24 @@ because it is a fault that needs attention but not the siren.
 The body carries the machine that noticed and the last reason, because with several tails the reader
 needs to tell one outage from three.
 
-These shapes are what ntfy renders as a title and headers, and what a webhook receives as JSON fields
-(`title`, `message`, `priority`, `tags`). One `Event`, every route, no route-specific text.
+These shapes are what ntfy renders as a title and headers. A webhook receives the same information
+with the head's name as its **own field**, not only inside the title, so a machine reading the JSON
+does not have to parse prose:
+
+```json
+{
+  "title": "Observer Frog head is down",
+  "head": "HeadName",
+  "message": "...",
+  "priority": 4,
+  "tags": ["rotating_light"],
+  "click": "...",
+  "source": "observer-frog"
+}
+```
+
+ntfy has no such field and gets the name in the title; that is the one place the two routes differ, and
+it is display, not content. One `Event`, every route.
 
 **Acceptance:** each message renders with a title, and the title contains the head's display name.
 
@@ -263,6 +284,23 @@ belief, not a configuration; the button turns it into a fact in one click and is
 value control on the tab. It publishes a real event through the real sink code, not a separate probe
 path that could disagree with what production does.
 
+The button exists only on an enabled route. A disabled route's card is greyed except for its tick,
+so there is nothing to test and nothing to press.
+
+**A disabled route keeps its values.** Its card stays in place with the URL, topic and proxy opt-in
+visible but read-only, greyed, and not focusable. Only the tick stays live, because the tick is how it
+comes back. Nothing is deleted when a route is switched off, and nothing is re-enabled behind the
+operator's back.
+
+Two separate actions, and they are different decisions:
+
+| Action | Effect |
+|---|---|
+| untick | `enabled = false`; every field preserved and greyed; no publishing, no test button |
+| clear | the whole `[[sink]]` block is removed; the fields are gone |
+
+Unticking is reversible and cheap. Clearing is a deliberate delete, so it asks.
+
 In tail mode the whole tab renders greyed with one sentence: *"This machine is a tail. Notifications
 belong to the head, which sees every machine's services."* Disabled, focusable-skipped, and it does not
 poll.
@@ -275,8 +313,10 @@ third shape, and it is the real work in this package.
 The writer replaces sinks **by kind**, leaving any other block untouched:
 
 - set fields on an existing `[[sink]]` of that kind, or append a new one
-- remove the block when a route is cleared rather than merely unticked
+- always write `enabled` explicitly, so a switched-off route can never be mistaken for an old config
+- remove the block only when a route is cleared, never when it is merely unticked
 - never leave a partial block, because a malformed `[[sink]]` takes the node down at load
+- never rewrite a block belonging to another kind, not even to reformat it
 
 Round-trip is the acceptance test: write, reload through `config::load`, compare field by field.
 A writer that produces TOML the parser reads differently is worse than no writer, since it fails at
@@ -296,8 +336,22 @@ is false, in the same place it currently skips an unknown kind.
 Defaulting to true rather than false is the only choice that does not silently stop alerts on an
 upgrade. A monitoring tool that goes quiet because of a schema change is the worst possible failure.
 
-**Acceptance:** an existing `[[sink]]` with no `enabled` key still publishes; adding `enabled = false`
-stops it without removing the block.
+**That default has one danger, and it is the whole risk of this package.** A missing key means "old
+config", and old configs were active. But a route the operator switched **off** must never be read as
+missing, or the default resurrects it on the next load. Two rules prevent that:
+
+1. **The writer always writes `enabled` explicitly**, true or false, never omitting it. After this
+   version, absence can only mean "written before 0.6.0", never "the operator did not care".
+2. **The writer never touches a sink it was not asked about.** Editing ntfy leaves webhook's block,
+   including its `enabled = false`, byte-identical.
+
+The failure this guards against is quiet and one-directional: every restart, every settings save, and
+every upgrade would switch an unwanted alert route back on, and the operator would only discover it by
+receiving notifications they had turned off.
+
+**Acceptance:** an existing `[[sink]]` with no `enabled` key still publishes; `enabled = false` stops it
+without removing the block; a disabled route survives a save, a reload and a restart still disabled; a
+disabled route survives the writer editing the *other* route.
 
 ### WP7: documentation and the honest hint
 
@@ -357,8 +411,10 @@ justify one.
 - **Every route shares one shape.** ntfy and webhook already exist in the dispatcher and differ by one
   field, so a per-route settings design would be inventing difference where there is none. Telegram
   and SimpleX, when they arrive, get the same treatment or they get an argument.
-- **`enabled` defaults to true.** An upgrade must never silence a working installation. The field
-  exists so unticking a box preserves the operator's URL and topic rather than deleting them.
+- **`enabled` defaults to true, and is always written explicitly.** The default exists so an upgrade
+  never silences a working installation; the explicit write exists so it never re-enables one the
+  operator switched off. Both directions of the same rule: a version does not decide what the
+  operator wants.
 - **`token_env` does not travel to tails.** The name refers to an environment variable on the head; the
   same name on another machine is at best absent and at worst a different secret.
 - **The switch publishes through `Notifier`, not to ntfy directly.** One route failing while another
