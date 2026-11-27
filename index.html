@@ -213,6 +213,13 @@
     }
     .privacy-curtain[hidden] { display: none; }
 
+    /* `hidden` must win, always.
+       Any element with `display: flex` and the `hidden` attribute stays visible, because an explicit
+       display value beats the attribute's default `display: none`. That is how the dashboard
+       first rendered around the login card, and how the discovery panel stayed open before it.
+       One rule here rather than a `[hidden]` override on each component. */
+    [hidden] { display: none !important; }
+
     .ios-status-bar-sampler {
       position: fixed;
       top: 0;
@@ -1962,8 +1969,10 @@
     <div id="poll-progress-bar" class="poll-strip-bar"></div>
   </div>
 
-  <!-- Solid Opaque Sticky Header - NO translucent blur over status bar -->
-  <header class="app-header">
+  <!-- Solid Opaque Sticky Header - NO translucent blur over status bar.
+       Hidden until signed in: the header names the machine and its port, which is exactly the
+       information the gate exists to withhold. -->
+  <header class="app-header" id="app-header" hidden>
     <div class="header-content">
       <!-- Connection Warning Banner (Pinned at top of header, always visible) -->
       <div id="connection-alert" class="connection-alert" role="alert">
@@ -2419,7 +2428,7 @@
       const API_BASE = (window.location.pathname.replace(/\/$/, '') || '');
       // Bump on every shell change. Declared before first use: a `const` referenced above its
       // declaration throws a TDZ error and takes the whole script down (it did).
-      const BUILD = 'of-38';
+      const BUILD = 'of-39';
       // Show the address actually in use, not a baked-in host.
       (function () {
         const el = document.getElementById('brand-url');
@@ -2582,9 +2591,21 @@
       // it back to hidden. The service worker is never consulted: WebKit kills idle workers in
       // about thirty seconds, so no access decision may depend on one running.
 
+      function setChrome(visible) {
+        // The header and the poll strip live outside app-shell, so hiding the shell alone left the
+        // title bar, the port line and the tabs on screen around the login card.
+        const header = document.getElementById('app-header');
+        const strip = document.querySelector('.poll-strip-container');
+        const footer = document.querySelector('.footer');
+        if (header) header.hidden = !visible;
+        if (strip) strip.hidden = !visible;
+        if (footer) footer.hidden = !visible;
+      }
+
       function showGate(mode, hint, note) {
         const gate = document.getElementById('auth-gate');
         const shell = document.getElementById('app-shell');
+        setChrome(false);
         const change = document.getElementById('auth-change-form');
         const login = document.getElementById('auth-login-form');
         const hintEl = document.getElementById('auth-hint');
@@ -2603,6 +2624,7 @@
         const shell = document.getElementById('app-shell');
         if (gate) gate.hidden = true;
         if (shell) shell.hidden = false;
+        setChrome(true);
       }
 
       async function checkAuth() {
