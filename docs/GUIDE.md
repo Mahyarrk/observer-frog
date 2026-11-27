@@ -222,7 +222,7 @@ makes it real.
 ## Tests
 
 ```bash
-cd rust && cargo test        # 108 tests
+cd rust && cargo test        # 126 tests
 ```
 
 Every behavioural rule in `docs/DESIGN.md` has a test named after it. One test does not check

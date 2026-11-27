@@ -17,51 +17,53 @@ dependency, a moving part, or an attack surface needs a reason stronger than "it
 | 0.2 | Two machines: head aggregates, tail reports over HTTP, dual listener (TLS for phones, plain for tails) |
 | 0.3 | Install and autostart on macOS and Linux, Settings GUI, service RAM on cards, silence and 413 gates |
 | 0.4 | Role switching as a live setting, pairing with operator approval, one stable unit name, service discovery and add-from-panel |
+| 0.5 | Operator sign-in, listener identity, TLS upload from Settings, scheme discovery for pairing |
 
-0.4.0 is the current release. 108 tests, one source tree, macOS and Linux.
+0.5.0 is the current release. 126 tests, one source tree, macOS and Linux.
 
 ---
 
-## 0.5.0: close the door
+## 0.5.0: close the door (shipped)
 
-**Why first:** the admin API is unauthenticated and reachable on the plain-HTTP report port. Anyone
-on the LAN can add services, flip the role, approve pairing requests or unpair machines. This is the
-only item on the roadmap where doing nothing is an active exposure.
+**Why it was first:** the admin API had been unauthenticated and reachable on the plain-HTTP report
+port. Anyone on the LAN could add services, flip the role, approve pairing requests or unpair
+machines.
 
-### Scope
+### What landed
 
-- **Operator authentication.** One password, bcrypt cost 12, session cookie (`HttpOnly`,
-  `SameSite=Lax`, `Secure` only when the listener has TLS), login serialised and rate-limited.
-- **Listener identity.** The two ports share one router, so the connection carries its role and route
-  policy is an exhaustive match. A dashboard route on the report port answers 404.
-- **Every admin route gated.** Reads too: service and machine names are what an attacker wants.
-- **Ingest keeps its own scheme.** Tails authenticate with their bearer token and cannot hold a
-  session. Token for machines, session for people.
-- **No service data in persistent browser storage.** This reverses F11. The shell stays cached so the
-  app launches instantly; the payload does not, because it names every service and machine. The
-  dashboard is also covered on backgrounding, so the iOS app switcher never shows it.
-- **Password management as its own Settings tab**, including "log out all other devices".
-- **Reset is a CLI subcommand**, not an HTTP route: a loopback rule cannot be made honest behind a
-  reverse proxy.
-- **First run** is a 0600 token file, cleared when the password is set.
-- **TLS import in Settings.** The operator supplies the certificate; the product never mints one.
-  Validated for parse, match and expiry. Applies on restart, because a listener binds at boot.
-- **GUI first.** Anything the CLI can do with certificates must be doable from the dashboard.
+- **Operator sign-in.** One password, bcrypt cost 12. Session cookie is `HttpOnly`, `SameSite=Lax`,
+  `Secure` when the listener has TLS. Logins are serialised, because bcrypt on a two-core box would
+  otherwise starve the poller, and rate-limited per peer: five failures, fifteen minutes.
+- **Listener identity.** A dashboard route asked of the report port answers 404, as if it did not
+  exist there. The two listeners finally know which one they are.
+- **Every admin route gated, reads included.** Service and machine names are the thing an attacker
+  wants.
+- **Machines keep their own scheme.** A tail presents a bearer token and cannot hold a session. Token
+  for machines, cookie for people.
+- **Nothing worth reading in the shell.** The dashboard is not in the page source while signed out,
+  and the header and progress strip hide with it: they name the machine and its port.
+- **TLS upload from Settings.** Two file pickers, not path fields. The pair is parsed, proven to
+  match, and only then written: random temp names, `0600` key, `0644` certificate, atomic rename. A
+  refused upload writes nothing at all.
+- **Pairing finds the dashboard by itself.** The port comes from discovery, the scheme is discovered
+  by asking the listener. Neither is assumed, so a head with a certificate and one without are both
+  reachable from the same button.
+- **No way to remove the password.** Decided against while testing: a dashboard that anyone holding
+  an unlocked phone can open to the whole LAN is not a setting worth having.
 
-### Not in scope
+### Not in scope, and still not
 
 Per-user accounts. Roles. 2FA. Password recovery. One operator, one password.
 
-### Done when
+### Verified on real machines
 
-- Every operator route returns 401 without a session, reads included.
-- A dashboard route on the report port returns 404, and tail reports still work.
-- The phone loads the dashboard over HTTPS with an imported certificate.
-- Backgrounding the app and reopening the switcher shows a blank screen, not the last dashboard.
-- With the LAN unplugged, the app opens to a neutral message rather than cached service names.
-- `passwd --reset` from the console changes the password and logs out every live session.
+Every operator route returns 401 without a session. A dashboard route on the report port returns 404
+while tail reports still work. The phone loads the dashboard over HTTPS with an uploaded certificate.
+Backgrounding the app and reopening shows a blank screen. With the LAN unplugged it opens to a
+neutral message. `passwd --reset` from the console changes the password and ends every session. Two
+machines, one acting as head, pairing approved by hand.
 
-The detailed plan lives in [PLAN-0.5.0.md](PLAN-0.5.0.md).
+The plan, kept for the reasoning rather than as a task list: [PLAN-0.5.0.md](PLAN-0.5.0.md).
 
 ---
 
@@ -74,7 +76,7 @@ being asked.
 
 - **PWA push.** VAPID key pair, a subscription table per device, a `push` handler in the service
   worker, and an enable button in Settings. iOS requires the PWA installed to the home screen and a
-  trusted certificate, which 0.5.0 provides.
+  trusted certificate, both of which 0.5.0 now provides.
 - **Notification routes.** A section in Settings to pick one or several sinks. The operator decides
   where an alert goes; nothing decides for them.
 - **ntfy stays.** It is self-hosted on the LAN and works with no internet at all. Push routes through
@@ -162,10 +164,11 @@ Recorded here so a later version answers them deliberately:
 2. **Graph granularity.** Per-service first, or per-node first.
 3. **Push client.** Whether to depend on a web-push crate or implement VAPID and payload encryption
    in-tree. The encryption is nontrivial; the dependency is small.
-4. **Nothing blocking 0.5.0.** Its plan is decided and in
-   [PLAN-0.5.0.md](PLAN-0.5.0.md).
+4. **Nothing blocking 0.6.0.** Push needs a VAPID key pair, which is the one generated secret this
+   project would own. Where it lives, and whether it rotates, is the first decision of that version.
 
 Settled during review: no pairing verification code, because the head's approval already proves what
 a code would; the login view replaces the shell rather than covering it, so an authenticated view
-never exists in the DOM before a session does; and the setup token is accepted only from its 0600
-file, not from loopback as a second path with the same trust assumption.
+never exists in the DOM before a session does; and the first-run password is the default `123456`
+rather than a setup token, because a token file is a second place to look and a default that must be
+changed is one place to remember. A password cannot be removed: only replaced.
