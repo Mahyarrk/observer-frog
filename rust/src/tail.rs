@@ -200,19 +200,27 @@ fn post_raw(opts: &TailOptions, body: &Value) -> Result<Value, (Option<u16>, Str
 pub fn run(mut cfg: Config, opts: TailOptions, halt: Arc<AtomicBool>) -> i32 {
     // Ask the machine what it is running rather than trusting a hand-written list. Discovery
     // only ever adds services the catalog can verify, so a stale entry cannot appear here.
-    if cfg.discover && cfg.services.is_empty() {
+    //
+    // Merged, not replaced, and without the old `services.is_empty()` gate: a config that names
+    // even one service — a heartbeat file, a private script — used to switch discovery off, so the
+    // one-shot reporter sent a two-service payload while the served path sent fourteen. Explicit
+    // entries win on id, so a hand-picked port is never overwritten by the catalog default.
+    if cfg.discover {
         match crate::catalog::load(None) {
             Ok(entries) => {
                 let found = crate::discover::discover(&entries, "127.0.0.1");
-                if found.is_empty() {
-                    println!("  discovered nothing; no catalog service is listening here");
-                } else {
-                    println!("  discovered {} service(s) on this machine:", found.len());
-                    for s in &found {
-                        println!("    {:<16} {}", s.id, s.target);
+                let mut added = 0;
+                for svc in found {
+                    if cfg.services.iter().any(|s| s.id == svc.id) {
+                        continue;
                     }
+                    println!("    discovered {:<16} {}", svc.id, svc.target);
+                    cfg.services.push(svc);
+                    added += 1;
                 }
-                cfg.services = found;
+                if added == 0 {
+                    println!("  discovered nothing new; every catalog service is already configured");
+                }
             }
             Err(e) => eprintln!("  cannot load the catalog, no discovery: {e}"),
         }
