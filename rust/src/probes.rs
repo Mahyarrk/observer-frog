@@ -470,6 +470,32 @@ mod tests {
     }
 
     #[test]
+    fn a_process_probe_naming_an_interface_is_satisfied_by_either() {
+        // The bug this pins: WireGuard is a userspace process on macOS and a kernel module on Linux.
+        // A config carrying both a process name and an interface must read as up when either is
+        // present, otherwise every Linux box reports WireGuard down forever.
+        let mut svc = crate::config::Service {
+            id: "wg".into(),
+            name: "WireGuard".into(),
+            group: "Network".into(),
+            probe: "process".into(),
+            // A process name no machine has.
+            target: "definitely-not-a-real-process-xyz".into(),
+            // The loopback interface, which every platform has under one of these two names.
+            iface: if cfg!(target_os = "linux") { "lo".into() } else { "lo0".into() },
+            ..Default::default()
+        };
+        let out = run(&svc);
+        assert_eq!(out.0, STATE_UP, "the interface alone must be enough: {out:?}");
+
+        svc.iface = String::new();
+        assert_eq!(run(&svc).0, STATE_DOWN, "no interface named, process missing: down");
+
+        svc.iface = "nope-not-an-iface".into();
+        assert_eq!(run(&svc).0, STATE_DOWN, "a missing interface is down");
+    }
+
+    #[test]
     fn split_hostport_variants() {
         assert_eq!(split_hostport("127.0.0.1:5432").unwrap(), ("127.0.0.1".into(), 5432));
         assert_eq!(split_hostport("tcp://host:80").unwrap(), ("host".into(), 80));

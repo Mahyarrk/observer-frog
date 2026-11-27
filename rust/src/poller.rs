@@ -214,8 +214,21 @@ pub fn sample(services: &[Service], snapshot: Option<&Snapshot>) -> Vec<serde_js
                     let svc = &services[i];
                     let (triple, ram) = if svc.probe == "process" {
                         let (found, cmd, rss) = snap.match_needle(&svc.target);
-                        let state = if found { probes::STATE_UP } else { probes::STATE_DOWN };
-                        let detail = if found { probes::clip(&cmd) } else { "not running".to_string() };
+                        // A process probe may also name an interface, because the same software ships
+                        // as a process on one platform and a kernel module on another. This branch
+                        // used to answer from the process snapshot alone, so WireGuard on Linux read
+                        // "not running" forever: no process to find, and the interface never asked.
+                        // The fallback belongs here as much as in `probes::run`, and asking is the
+                        // same one call.
+                        let (state, detail) = if found {
+                            (probes::STATE_UP, probes::clip(&cmd))
+                        } else if !svc.iface.is_empty() {
+                            let t = probes::probe_iface(&svc.iface);
+                            (if t.0 == probes::STATE_UP { probes::STATE_UP } else { probes::STATE_DOWN },
+                             t.1)
+                        } else {
+                            (probes::STATE_DOWN, "not running".to_string())
+                        };
                         ((state.to_string(), detail, 0i64), rss)
                     } else {
                         // A listening service: resolve the PID that holds the port in this same
