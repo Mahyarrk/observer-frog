@@ -89,6 +89,57 @@ The plan assumes nothing else about the operator's Telegram setup. No user accou
 number, no MTProto client, no library — the Bot HTTP API over the same `ureq` agent every other
 call uses.
 
+## Where the messages go: a direct chat, with a channel as the second form
+
+**A bot cannot start a conversation.** Telegram only permits a bot to message a chat after that
+chat has contacted the bot first. This single rule decides the design, and it is why the direct
+chat is the documented path rather than a footnote.
+
+### Direct chat — the default, and what the card teaches first
+
+```
+@BotFather  →  /newbot  →  name, username  →  token
+you         →  open the bot, press Start          ← the one manual step, once, ever
+bot         →  may now message you for the life of the bot
+```
+
+That is the whole setup. Two steps, and the second is a button in Telegram.
+
+`chat_id` is then your own user id: a positive integer that never changes, does not depend on any
+group existing, and cannot be confused with anything else. It is found by opening
+`api.telegram.org/bot<token>/getUpdates` after pressing Start — the message you sent appears there
+with the id in it.
+
+**A second person who wants the same alerts presses Start on the same bot** and gets their own DM.
+No group, no channel, no shared membership to administer.
+
+### Channel — supported, documented second
+
+The same `chat_id` field accepts a channel, so this costs one paragraph rather than one feature.
+The differences that matter:
+
+- The bot must be **added as an administrator**, and specifically needs permission to post. A bot
+  that is merely a member cannot write.
+- The id is **negative** and typically starts with `-100`.
+- Losing the admin role ends delivery silently, which is the channel's characteristic failure.
+
+A channel is the right choice when the alerts should be one shared surface several people watch,
+rather than a personal notification. It is not the default because it is more moving parts for the
+same result.
+
+### Why direct is first, in one line each
+
+| | direct chat | channel |
+|---|---|---|
+| Setup | create bot, press Start | create bot, create channel, make bot admin |
+| `chat_id` | positive, stable, one integer | negative, tied to the channel existing |
+| Reaches you at 3am | it is a DM, the surface you check | a channel you may not have open |
+| Breaks silently if | you block the bot | the bot loses admin |
+| Second reader | presses Start on the same bot | already a channel member |
+
+The third row is the argument. This project alerts when a head dies, and an alert in a channel
+nobody is watching is an alert that did not happen.
+
 ## What lands
 
 - `SINK_TYPES` gains `"telegram"`.
@@ -102,24 +153,40 @@ call uses.
   - `base` defaults to `https://api.telegram.org`, overridable, because a self-hosted Bot API
     server exists and costs one config field to support.
 - Message composition: the event's title and detail become one message. Telegram has no
-  title/body split like ntfy, so the title goes first on its own line, then the detail, then the
-  node name — the same information, laid out for the channel.
+    title/body split like ntfy, so the title goes first on its own line, then the detail, then the
+    node name — the same information, laid out for the surface. A direct chat and a channel get
+    the identical message; nothing in the composition branches on which one it is.
 - A Settings card: token env/file, chat id, enabled tick, test button, and a link to the BotFather
   instructions written in the same voice as the ntfy topic warning.
 
 ## Work packages
 
-### WP1: the field, and where a chat id comes from
+### WP1: the field, and the card that explains it
 
-`chat_id` is not something an operator knows offhand. Two ways to get it, and the plan offers both
-because the first is what people actually do:
+`chat_id` is not something an operator knows offhand, so the card teaches it rather than assuming
+it. The instructions are written for the direct chat first, with a channel as a collapsible second
+form:
 
-- Send a message to the bot and read `getUpdates` — the card explains this in two sentences.
-- Paste a `@channelname` for a channel the bot administers.
+**Direct chat, in three sentences on the card:**
 
-The card links to `api.telegram.org/bot<token>/getUpdates` prefilled, so the operator can paste the
-token and see their own chat id. That URL contains the token, so it is generated in the browser, not
-on the server, and never logged.
+1. Talk to `@BotFather`, send `/newbot`, keep the token it replies with.
+2. Open your new bot and press **Start** — nothing can be delivered until you do, because Telegram
+   does not let a bot speak first.
+3. Open `api.telegram.org/bot<your token>/getUpdates` and copy the number in `"chat":{"id":…}`.
+
+**Channel, one paragraph:**
+
+1. Add the bot to the channel **as an administrator**, with permission to post.
+2. The id is negative and usually starts with `-100`. Send a message in the channel, read
+   `getUpdates`, and take the id from there.
+
+The `getUpdates` URL contains the token, so the link is **built in the browser from what the
+operator pasted**, never rendered server-side and never logged. A token in a server log is a token
+in a log rotation and a support paste.
+
+The card saves a working example of the failure this prevents: a `chat_id` pasted before pressing
+Start produces `400 chat not found`, which reads like a wrong id and is almost always a missing
+Start.
 
 ### WP2: the sender
 
@@ -136,12 +203,15 @@ Three answers, three meanings, and the code must not blur them:
 | Telegram says | Reality | What the operator sees |
 |---|---|---|
 | `200 {"ok":true}` | delivered to the chat | nothing, as usual |
-| `401` / `404` | token wrong or bot deleted | "the bot token was refused" |
-| `400 chat not found` | token fine, chat id wrong | "the token works; the chat id does not" |
+| `401` | token wrong, or the bot was deleted | "the bot token was refused" |
+| `400 chat not found` | the id is wrong **or the bot was never started** | "no such chat. If you have not pressed Start in the bot, do that first." |
+| `403 bot was blocked by the user` | you blocked your own bot | "this account has blocked the bot; unblock it in Telegram" |
+| `403 not enough rights` | channel: the bot lost its admin role | "the bot can no longer post there; make it an administrator again" |
 | no answer | Telegram is down, or the network is | "telegram did not answer" |
 
-That last distinction — token wrong versus chat wrong — is the Telegram equivalent of ntfy's topic
-mismatch, and it is the single most likely operator error. It gets its own message.
+Those five lines are the Telegram equivalent of ntfy's topic-mismatch paragraph, and the middle
+three are each a distinct operator error that a single "failed" would hide. Rule 14 of the contract
+exists for exactly this table.
 
 ### WP4: the card, and the honest test button
 
@@ -156,11 +226,18 @@ should work because the plumbing is shared" is the kind of claim that turns out 
 
 ## Done when
 
-- A bot created with BotFather receives a live down and recovery message from a stopped service.
-- A wrong token and a wrong chat id produce different, actionable messages.
-- With the Telegram sink disabled, no request is made at all.
-- With two routes enabled and one broken, the working one still delivers.
-- 4096-character truncation is asserted in a unit test.
+- A BotFather bot delivers a live down **and** recovery message to a direct chat, from a service
+  stopped by hand.
+- The same bot delivers to a channel it administers, proving the second form costs only the field
+  it shares.
+- Each of the five failure lines above is produced by a real request, not just a unit test: wrong
+  token, wrong chat id, blocked bot, demoted bot, unreachable host.
+- With the Telegram sink disabled, no request leaves the machine at all.
+- With Telegram and ntfy both enabled and Telegram broken, ntfy still delivers.
+- 4096-character truncation and the `disable_notification` rule for low-priority events are
+  asserted in unit tests.
+- The token never appears in a log line, an error string, or the dashboard's HTML — grepped for,
+  not assumed.
 
 ## Not doing
 
@@ -375,8 +452,10 @@ the request-shape tests, the live sends, the truncation bounds, the chart agains
 
 1. **SimpleX's transport.** The spike answers it, but if you already know which approach works in
    your setup, that saves a day.
-2. **Telegram `chat_id` for you.** A direct chat with the bot, or a channel? It changes the
-   instructions on the card.
+2. ~~Telegram `chat_id`: direct chat or channel?~~ **Settled: direct chat is the documented path,
+   channel is the supported second form.** A bot cannot initiate a conversation, so the direct
+   chat needs one press of Start and nothing else; a channel needs an admin grant that can be
+   revoked. Both are the same field.
 3. **A Windows machine.** Exists, or defer 0.6.5 indefinitely?
 4. **Graph granularity.** Per-service first is assumed. Per-node aggregated could come later.
 
