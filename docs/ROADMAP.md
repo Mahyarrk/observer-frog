@@ -148,22 +148,18 @@ The plan: [PLAN-0.6.1.md](PLAN-0.6.1.md).
 - **Both arrive on the shape 0.6.0 established**: a `[[sink]]` block, a card in the same template, an
   `enabled` tick and a test button. A route that needs a different settings shape needs an argument
   first.
-- **Web push**, if it does not fit beside the platform work: VAPID key pair, a subscription table per
-  device, a `push` handler in the service worker, and an enable button. It is the only route that
-  reaches a phone without a third-party relay or a server the operator runs.
+- **Web push**: VAPID key pair, a subscription table per device, a `push` handler in the service
+  worker, and an enable button. It is the only route that reaches a phone without a third-party
+  relay or a server the operator runs — and, unlike ntfy, it cannot be lost to a wrong port number
+  going unnoticed for a week.
 - **Metrics graphs.** The data is already there: `hourly_rollup` keeps 30 days of up/down/degraded
   counts and latency sums. This is frontend work over an existing table, not new collection.
 - **Windows.** The first honest attempt at autostart (Task Scheduler). Until this lands, `install`
   refuses on Windows and the dashboard works without a service.
-- **Ubuntu and Arch.** The user unit has only been proven on Debian 13. Ubuntu and Arch both ship
-  systemd and lingering, but their packaged tooling, firewall defaults and `ss` output are not
-  identical, and "it is Linux" is not a test result. Arch in particular is rolling: the point is to
-  find out what breaks on a system that updates underneath the binary, not to declare it supported
-  from a single install. Support means installed, enabled and surviving a reboot on real machines.
-- **Three and four machines.** Two nodes have been proven. Three and four exercise what two cannot:
-  roster ordering, the pairing list with several pending requests, and one card per machine at a
-  scale where a wrong node id stops being invisible. This is the test the 0.4.0 pairing work never
-  had.
+- **A fourth machine.** Three nodes now report to one head, so roster ordering and multiple approved
+  pairings have been exercised for real. Four adds what three cannot: a second machine running the
+  same software, which is where a wrong node id stops being invisible, and where one card per
+  machine either scales or does not.
 
 ### Done when
 
@@ -171,10 +167,10 @@ The plan: [PLAN-0.6.1.md](PLAN-0.6.1.md).
   is already true of the two that shipped; the new ones inherit it rather than re-earning it.
 - Graphs render 30 days of uptime and latency without a new query pattern.
 - Windows: the binary installs, starts at login, and survives a reboot.
-- Ubuntu and Arch: same, each on a real install (not a Debian box wearing the name), including a
-  reboot and an upgrade on Arch to catch what rolling release breaks.
-- Three machines and then four: all report, all appear, pairing approves each, and removing one
-  leaves the others untouched.
+- Ubuntu: the binary installs as a user unit, starts at boot without a login, and survives a reboot.
+  (Three machines reporting to one head is already proven; what is untested is the reboot.)
+- A fourth machine: all report, all appear, pairing approves each, and removing one leaves the others
+  untouched.
 
 ---
 
@@ -199,6 +195,10 @@ These have been decided against, and are recorded so they are not re-argued:
   database with its own failure modes.
 - **A certificate authority.** The product terminates TLS; it does not issue or renew.
 - **Free-form probe builder.** The catalog exists so that a card means a known thing.
+- **Arch Linux.** Rolling release means the runtime moves underneath a static binary that was tested
+  against a snapshot, and the failure mode is subtle rather than loud. Two stable distributions cover
+  the Linux case; a third that changes weekly buys breadth at the cost of a support promise nobody
+  can keep.
 
 ---
 
@@ -206,9 +206,9 @@ These have been decided against, and are recorded so they are not re-argued:
 
 Recorded here so a later version answers them deliberately:
 
-1. **Platform breadth.** Windows, Ubuntu and Arch are all scheduled for 0.7.0. If any of the three
-   turns out to need more than a unit file (Windows probably will), it splits into its own release
-   rather than delaying the others.
+1. **Platform breadth.** Windows is the only platform left unscheduled. If it needs more than a
+   trivial service definition (it probably will — Task Scheduler is not systemd), it gets its own
+   release rather than delaying the rest of 0.7.0.
 2. **Graph granularity.** Per-service first, or per-node first.
 3. **Push client.** Whether to depend on a web-push crate or implement VAPID and payload encryption
    in-tree. The encryption is nontrivial; the dependency is small.
