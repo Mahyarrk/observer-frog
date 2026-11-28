@@ -270,6 +270,18 @@ fn advance(
                 first_sighting: false,
             }));
         }
+        // The stored state tracks the reported one even when neither is "down".
+        //
+        // It did not, and the gap was visible: a service that reported `degraded` once — a file one
+        // second past its threshold during a reboot — kept that word in the state table for ever,
+        // while every subsequent check row said `up`. The card lied, and only about the services
+        // that had ever been briefly unhappy. `degraded` and `up` are both "answering", so this is
+        // not a transition worth alerting on; it is only worth recording.
+        if is_healthy(&prev.state) && is_healthy(&row.status) && prev.state != row.status {
+            prev.state = row.status.clone();
+            save_state(conn, node_id, &row.service_id, prev)?;
+            return Ok(None);
+        }
         if is_neutral(&prev.state) && is_healthy(&row.status) {
             // A node that was silent and is reporting again. This is worth one message: the
             // operator was told it went quiet, so they need to be told it came back.
@@ -704,6 +716,29 @@ mod tests {
         apply_wave(&p, "local", &[row("a", "up")], Some(base + 100)).unwrap();
         let rows = uptime_rows(&p, "local", 9_999).unwrap();
         assert_eq!(rows[0].checks, 2, "two samples in one hour must aggregate to 2");
+    }
+
+    #[test]
+    /// `degraded` must not be sticky. Both states mean "answering", so the change does not alert —
+    /// but the stored state has to follow the report, or the card shows a word that stopped being
+    /// true hours ago.
+    #[test]
+    fn recovering_from_degraded_to_up_is_recorded() {
+        let (_d, p) = setup();
+        let base = crate::db::now() - 7200;
+        apply_wave(&p, "local", &[row("a", "degraded")], Some(base)).unwrap();
+        apply_wave(&p, "local", &[row("a", "up")], Some(base + 100)).unwrap();
+        apply_wave(&p, "local", &[row("a", "up")], Some(base + 200)).unwrap();
+
+        let conn = crate::db::connect(&p).unwrap();
+        let state: String = conn
+            .query_row(
+                "SELECT state FROM service_state WHERE node_id='local' AND service_id='a'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(state, "up", "a service reporting up must be stored as up, not the last degraded");
     }
 
     #[test]
