@@ -16,8 +16,9 @@ outline at the end, because it needs a decision before it needs a plan.
 | 0.6.5 | Windows | The last platform with no proof |
 | 0.7.0 | Web push | A decision first: whose keys |
 
-**A fourth machine is not scheduled.** Three tails share one head today and nothing in the code
-counts machines; a fourth would exercise nothing the third did not.
+**A fourth machine is not scheduled.** Nothing in the code counts machines, so one more would
+exercise nothing the last one did not. The Ubuntu support shipped in 0.6.1 and its test rig has been
+retired; 0.6.2 through 0.6.4 need one head and one tail, which is a pair that exists.
 
 ---
 
@@ -345,6 +346,16 @@ makes it the one place where a chart is not scope creep.
 
 ## Work packages
 
+### WP0: where thirty days come from, on a fresh database
+
+A prerequisite, not a work package: `hourly_rollup` is populated by the head as it applies waves, and
+its oldest row can only be as old as the database. On a machine installed a week ago, "thirty days"
+is seven real days and twenty-three empty ones — which the chart must draw as gaps, not as uptime.
+
+`db::prune` keeps 30 days of rollup and 24 h of raw checks, so the rollup is the only source. Nothing
+in this version may read `service_checks` for a graph: 24 hours of history is exactly what an
+hourly chart cannot be built from.
+
 ### WP1: the API shape
 
 `/api/history?days=N` already returns incidents, uptime rows and KPIs. The graphs need a per-hour
@@ -371,6 +382,8 @@ already selected. No new navigation, no new tab.
 - Degraded hours are visually distinct from both up and down.
 - The page still works with JavaScript-heavy history absent — that is, it degrades to the current
   snapshot rather than breaking.
+- A database with seven days of rollup draws seven days of band and twenty-three of gap, asserted
+  against a fixture with a known start date.
 
 ---
 
