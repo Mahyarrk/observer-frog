@@ -52,22 +52,16 @@ pub fn build(cfg: &Config, poller_ref: Arc<Mutex<Option<Arc<poller::Poller>>>>) 
     app
 }
 
-pub fn run(mut cfg: Config, config_path: Option<PathBuf>, tls: Option<(PathBuf, PathBuf)>) -> i32 {
-    // Ask the machine what it runs, before anything is built from the config. Shared with the
-    // reload path in `Watcher::refresh` and the one-shot reporter in `tail::run`, because when each
-    // carried its own copy they disagreed: boot merged discovery, a reload did not, and every
-    // discovered service vanished a wave later while the node kept reporting the rest.
-    let before = cfg.services.len();
-    cfg.services = crate::config::merge_discovery(cfg.services, cfg.discover);
-    if cfg.discover {
-        for s in &cfg.services[before.min(cfg.services.len())..] {
-            eprintln!("    discovered {:<16} {}", s.id, s.target);
-        }
-        let added = cfg.services.len().saturating_sub(before);
-        if added > 0 {
-            eprintln!("  discovered {added} service(s) on this machine");
-        }
-    }
+pub fn run(cfg: Config, config_path: Option<PathBuf>, tls: Option<(PathBuf, PathBuf)>) -> i32 {
+    // No discovery here. Discovery is an action the operator takes — `discover`, or the Scan button
+    // in Settings — never something a node does to itself on the way up. A monitored service is a
+    // decision, and a card should mean the operator chose to watch that thing.
+    //
+    // This briefly lived here, to let a brand-new machine populate itself. The cost was worse than
+    // the convenience: every node rescanned at boot and every five minutes after, so a service
+    // nobody chose could appear on a dashboard, alert when it fell over, and be impossible to get
+    // rid of without noticing it first. The Scan button already solves the new-machine case in one
+    // click, and it asks first.
 
     let watcher_holder: Arc<Mutex<Option<Watcher>>> = Arc::new(Mutex::new(
         Watcher::new(config_path.as_deref().or(cfg.path.as_deref())).ok(),

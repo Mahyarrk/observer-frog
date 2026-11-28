@@ -197,17 +197,8 @@ fn post_raw(opts: &TailOptions, body: &Value) -> Result<Value, (Option<u16>, Str
 }
 
 /// Run the tail loop until stopped.
-pub fn run(mut cfg: Config, opts: TailOptions, halt: Arc<AtomicBool>) -> i32 {
-    // Same merge the served path uses — see `config::merge_discovery` for why it is shared.
-    let before = cfg.services.len();
-    cfg.services = crate::config::merge_discovery(cfg.services, cfg.discover);
-    let added = cfg.services.len().saturating_sub(before);
-    if added > 0 {
-        for s in &cfg.services[before..] {
-            println!("    discovered {:<16} {}", s.id, s.target);
-        }
-        println!("  discovered {added} service(s) on this machine");
-    }
+pub fn run(cfg: Config, opts: TailOptions, halt: Arc<AtomicBool>) -> i32 {
+    // Discovery is the operator's action, not the reporter's: see the note in `runtime::run`.
 
     println!("observer-frog tail");
     println!("  node {} ({})", cfg.node_id, crate::config::hostname());

@@ -489,9 +489,6 @@ pub fn load(path: Option<&Path>) -> Result<Config, ConfigError> {
 /// discovered services vanished a wave after boot while the node kept reporting the rest.
 ///
 /// Explicit entries win on id, so a port chosen by hand is never overwritten by the catalog default.
-/// How often a running node asks the machine what it is running, even with no config change.
-const RESCAN_INTERVAL: std::time::Duration = std::time::Duration::from_secs(300);
-
 pub fn merge_discovery(mut services: Vec<Service>, discover: bool) -> Vec<Service> {
     if !discover {
         return services;
@@ -511,20 +508,14 @@ pub struct Watcher {
     path: Option<PathBuf>,
     mtime: Option<std::time::SystemTime>,
     pub error: Option<String>,
-    /// When discovery last ran, so a service that starts after this process can still be found.
-    last_scan: std::time::Instant,
 }
 
 impl Watcher {
     pub fn new(path: Option<&Path>) -> Result<Self, ConfigError> {
-        let mut config = load(path)?;
-        // Merge here as well as on reload. The watcher's first config is what the runtime uses until
-        // the file changes — which may be never — so a merge that happened only on reload meant
-        // discovery was discarded for the whole life of the process.
-        config.services = merge_discovery(config.services.clone(), config.discover);
+        let config = load(path)?;
         let file = config.path.clone();
         let mtime = file.as_ref().and_then(|p| fs::metadata(p).ok()).and_then(|m| m.modified().ok());
-        Ok(Self { config, path: file, mtime, error: None, last_scan: std::time::Instant::now() })
+        Ok(Self { config, path: file, mtime, error: None })
     }
 
     fn stat(&self) -> Option<std::time::SystemTime> {
@@ -538,38 +529,23 @@ impl Watcher {
     /// wave after boot: the node kept reporting, but only the handful of services that happened to
     /// be written down, and the head marked the rest "no longer reporting" four waves later. A
     /// reload has to rebuild the config the same way boot does, or the two disagree.
+    /// Re-read the file when it changes. Nothing else.
+    ///
+    /// No discovery, and no rescan on a clock: the config is what the operator chose, so a reload
+    /// returns exactly that. Discovery had been folded in here and it made the file and the running
+    /// state disagree — the file said two services, the dashboard said fifteen, and the difference
+    /// was whatever happened to be listening at the moment of the scan.
     pub fn refresh(&mut self) -> &Config {
         let mtime = self.stat();
-        let changed = mtime != self.mtime;
-
-        // Discovery also re-runs on a clock, not only when the file changes.
-        //
-        // It ran once, at process start, which races everything else on the machine: after a
-        // reboot the observer is up in a second while ntfy, VoceChat and a container take longer, so
-        // the scan found seven services and the node reported seven for as long as the file stayed
-        // untouched. A service that starts later than the watcher was invisible until someone
-        // restarted it — which is the manual step this design exists to remove.
-        //
-        // Every five minutes is the compromise: long enough that a fleet of boxes is not rescanning
-        // constantly, short enough that a slow service appears without anyone noticing. A scan that
-        // finds nothing new changes nothing.
-        let due = self.config.discover && self.last_scan.elapsed() >= RESCAN_INTERVAL;
-
-        if changed || due {
-            if changed {
-                self.mtime = mtime;
-            }
+        if mtime != self.mtime {
+            self.mtime = mtime;
             let target = self.path.clone().unwrap_or_else(default_path);
             match load(Some(&target)) {
-                Ok(mut c) => {
-                    c.services = merge_discovery(c.services, c.discover);
+                Ok(c) => {
                     self.config = c;
                     self.error = None;
                 }
                 Err(e) => self.error = Some(e.0),
-            }
-            if due {
-                self.last_scan = std::time::Instant::now();
             }
         }
         &self.config
@@ -580,14 +556,14 @@ impl Watcher {
 mod port_tests {
     use super::{check_poll_interval, load, port_of, Watcher};
 
-    /// A reload must not throw away what discovery added.
+    /// A reload returns the file, and nothing but the file.
     ///
-    /// The regression: `Watcher::refresh` returned the file's service list alone, so a node with
-    /// `discover = true` and two hand-written services reported fourteen at boot and two from the
-    /// first reload onwards. The head marked the other twelve "no longer reporting" after four
-    /// waves. Nothing here needs a network: the assertion is that the two lists agree.
+    /// Discovery is an operator action, so the running config must equal what was written down. The
+    /// regression this guards against is the opposite of the obvious one: a watcher that "helpfully"
+    /// merged whatever it could discover made the dashboard show services the config never named,
+    /// and those services alerted when they fell over. `refresh` must stay a plain re-read.
     #[test]
-    fn a_reload_keeps_what_discovery_merged() {
+    fn a_reload_returns_exactly_the_file() {
         let dir = tempfile::tempdir().unwrap();
         let f = dir.path().join("tail.toml");
         std::fs::write(
@@ -605,19 +581,13 @@ mod port_tests {
         .unwrap();
         let after = w.refresh().services.len();
 
-        // What the file alone yields, and what the merge yields. Without the merge in `refresh`
-        // these differ by every catalog service this machine happens to run — here, at least the
-        // one every machine in this project has: ssh.
-        let file_only = load(Some(&f)).unwrap().services.len();
-        let merged = super::merge_discovery(load(Some(&f)).unwrap().services, true).len();
-        assert_eq!(file_only, 1, "one service is written down");
-        assert!(
-            merged > file_only,
-            "the fixture is not exercising discovery: merge added nothing"
-        );
+        // One service is written down, so one must be polled — even on a machine running a dozen
+        // catalog services. Anything larger means the watcher discovered on its own initiative.
+        assert_eq!(after, 1, "a reload must return exactly the file, not what it could discover");
         assert_eq!(
-            after, merged,
-            "a reload must keep what discovery merged: file {file_only}, merged {merged}, reload {after}"
+            after,
+            load(Some(&f)).unwrap().services.len(),
+            "the running config must match the file it was loaded from"
         );
     }
 
