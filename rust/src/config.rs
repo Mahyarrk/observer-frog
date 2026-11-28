@@ -489,6 +489,9 @@ pub fn load(path: Option<&Path>) -> Result<Config, ConfigError> {
 /// discovered services vanished a wave after boot while the node kept reporting the rest.
 ///
 /// Explicit entries win on id, so a port chosen by hand is never overwritten by the catalog default.
+/// How often a running node asks the machine what it is running, even with no config change.
+const RESCAN_INTERVAL: std::time::Duration = std::time::Duration::from_secs(300);
+
 pub fn merge_discovery(mut services: Vec<Service>, discover: bool) -> Vec<Service> {
     if !discover {
         return services;
@@ -508,6 +511,8 @@ pub struct Watcher {
     path: Option<PathBuf>,
     mtime: Option<std::time::SystemTime>,
     pub error: Option<String>,
+    /// When discovery last ran, so a service that starts after this process can still be found.
+    last_scan: std::time::Instant,
 }
 
 impl Watcher {
@@ -519,7 +524,7 @@ impl Watcher {
         config.services = merge_discovery(config.services.clone(), config.discover);
         let file = config.path.clone();
         let mtime = file.as_ref().and_then(|p| fs::metadata(p).ok()).and_then(|m| m.modified().ok());
-        Ok(Self { config, path: file, mtime, error: None })
+        Ok(Self { config, path: file, mtime, error: None, last_scan: std::time::Instant::now() })
     }
 
     fn stat(&self) -> Option<std::time::SystemTime> {
@@ -535,8 +540,25 @@ impl Watcher {
     /// reload has to rebuild the config the same way boot does, or the two disagree.
     pub fn refresh(&mut self) -> &Config {
         let mtime = self.stat();
-        if mtime != self.mtime {
-            self.mtime = mtime;
+        let changed = mtime != self.mtime;
+
+        // Discovery also re-runs on a clock, not only when the file changes.
+        //
+        // It ran once, at process start, which races everything else on the machine: after a
+        // reboot the observer is up in a second while ntfy, VoceChat and a container take longer, so
+        // the scan found seven services and the node reported seven for as long as the file stayed
+        // untouched. A service that starts later than the watcher was invisible until someone
+        // restarted it — which is the manual step this design exists to remove.
+        //
+        // Every five minutes is the compromise: long enough that a fleet of boxes is not rescanning
+        // constantly, short enough that a slow service appears without anyone noticing. A scan that
+        // finds nothing new changes nothing.
+        let due = self.config.discover && self.last_scan.elapsed() >= RESCAN_INTERVAL;
+
+        if changed || due {
+            if changed {
+                self.mtime = mtime;
+            }
             let target = self.path.clone().unwrap_or_else(default_path);
             match load(Some(&target)) {
                 Ok(mut c) => {
@@ -545,6 +567,9 @@ impl Watcher {
                     self.error = None;
                 }
                 Err(e) => self.error = Some(e.0),
+            }
+            if due {
+                self.last_scan = std::time::Instant::now();
             }
         }
         &self.config
