@@ -53,35 +53,19 @@ pub fn build(cfg: &Config, poller_ref: Arc<Mutex<Option<Arc<poller::Poller>>>>) 
 }
 
 pub fn run(mut cfg: Config, config_path: Option<PathBuf>, tls: Option<(PathBuf, PathBuf)>) -> i32 {
-    // Ask the machine what it runs, before anything is built from the config.
-    //
-    // This lived only in `tail::run`, the one-shot reporter, so a served node with `discover = true`
-    // and no service list discovered nothing: it polled zero services, and because an empty payload
-    // is skipped (I3) it never sent a report, so it could not even reach the 401 that starts
-    // pairing. A fresh machine therefore had no way to enrol itself, which is the exact case a tail
-    // on a new box is. Doing it here covers every path that serves.
-    // Merged, not replaced: a config may hold services the catalog cannot describe — a file-age
-    // heartbeat, a private script — and the earlier `services.is_empty()` gate meant adding one
-    // switched discovery off entirely. Explicit entries win on id, so a port chosen by hand is not
-    // overwritten by the catalog default.
+    // Ask the machine what it runs, before anything is built from the config. Shared with the
+    // reload path in `Watcher::refresh` and the one-shot reporter in `tail::run`, because when each
+    // carried its own copy they disagreed: boot merged discovery, a reload did not, and every
+    // discovered service vanished a wave later while the node kept reporting the rest.
+    let before = cfg.services.len();
+    cfg.services = crate::config::merge_discovery(cfg.services, cfg.discover);
     if cfg.discover {
-        match crate::catalog::load(None) {
-            Ok(entries) => {
-                let found = crate::discover::discover(&entries, "127.0.0.1");
-                let mut added = 0;
-                for svc in found {
-                    if cfg.services.iter().any(|s| s.id == svc.id) {
-                        continue;
-                    }
-                    eprintln!("    discovered {:<16} {}", svc.id, svc.target);
-                    cfg.services.push(svc);
-                    added += 1;
-                }
-                if added > 0 {
-                    eprintln!("  discovered {added} service(s) on this machine");
-                }
-            }
-            Err(e) => eprintln!("  cannot load the catalog, no discovery: {e}"),
+        for s in &cfg.services[before.min(cfg.services.len())..] {
+            eprintln!("    discovered {:<16} {}", s.id, s.target);
+        }
+        let added = cfg.services.len().saturating_sub(before);
+        if added > 0 {
+            eprintln!("  discovered {added} service(s) on this machine");
         }
     }
 

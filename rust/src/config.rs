@@ -481,6 +481,27 @@ pub fn load(path: Option<&Path>) -> Result<Config, ConfigError> {
     })
 }
 
+/// Add every catalog service this machine is running to `services`, keeping what is already there.
+///
+/// One function, because three places need the same answer and they drifted apart when each had
+/// its own copy: `runtime::run` at boot, `tail::run` for the one-shot reporter, and `Watcher::refresh`
+/// on every reload. The refresh case was the costly one — it returned the file's list alone, so
+/// discovered services vanished a wave after boot while the node kept reporting the rest.
+///
+/// Explicit entries win on id, so a port chosen by hand is never overwritten by the catalog default.
+pub fn merge_discovery(mut services: Vec<Service>, discover: bool) -> Vec<Service> {
+    if !discover {
+        return services;
+    }
+    let Ok(entries) = crate::catalog::load(None) else { return services };
+    for svc in crate::discover::discover(&entries, "127.0.0.1") {
+        if !services.iter().any(|s| s.id == svc.id) {
+            services.push(svc);
+        }
+    }
+    services
+}
+
 /// Holds the current config and swaps it when the file's mtime changes.
 pub struct Watcher {
     pub config: Config,
@@ -501,13 +522,21 @@ impl Watcher {
         self.path.as_ref().and_then(|p| fs::metadata(p).ok()).and_then(|m| m.modified().ok())
     }
 
+    /// Re-read the file when it changes, and merge discovery into the result.
+    ///
+    /// The merge is the point. Discovery adds services the config file does not name, so a reload
+    /// that returned the file's contents alone silently dropped every one of them on the first
+    /// wave after boot: the node kept reporting, but only the handful of services that happened to
+    /// be written down, and the head marked the rest "no longer reporting" four waves later. A
+    /// reload has to rebuild the config the same way boot does, or the two disagree.
     pub fn refresh(&mut self) -> &Config {
         let mtime = self.stat();
         if mtime != self.mtime {
             self.mtime = mtime;
             let target = self.path.clone().unwrap_or_else(default_path);
             match load(Some(&target)) {
-                Ok(c) => {
+                Ok(mut c) => {
+                    c.services = merge_discovery(c.services, c.discover);
                     self.config = c;
                     self.error = None;
                 }
@@ -520,7 +549,48 @@ impl Watcher {
 
 #[cfg(test)]
 mod port_tests {
-    use super::{check_poll_interval, load, port_of};
+    use super::{check_poll_interval, load, port_of, Watcher};
+
+    /// A reload must not throw away what discovery added.
+    ///
+    /// The regression: `Watcher::refresh` returned the file's service list alone, so a node with
+    /// `discover = true` and two hand-written services reported fourteen at boot and two from the
+    /// first reload onwards. The head marked the other twelve "no longer reporting" after four
+    /// waves. Nothing here needs a network: the assertion is that the two lists agree.
+    #[test]
+    fn a_reload_keeps_what_discovery_merged() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("tail.toml");
+        std::fs::write(
+            &f,
+            "discover = true\nserve = false\n\n[[service]]\nid = \"explicit\"\nprobe = \"tcp\"\ntarget = \"127.0.0.1:1\"\n",
+        )
+        .unwrap();
+
+        let mut w = Watcher::new(Some(&f)).unwrap();
+        // Touch the file so the mtime moves and the watcher reloads.
+        std::fs::write(
+            &f,
+            "discover = true\nserve = false\n\n[[service]]\nid = \"explicit\"\nprobe = \"tcp\"\ntarget = \"127.0.0.1:1\"\n\n# touched\n",
+        )
+        .unwrap();
+        let after = w.refresh().services.len();
+
+        // What the file alone yields, and what the merge yields. Without the merge in `refresh`
+        // these differ by every catalog service this machine happens to run — here, at least the
+        // one every machine in this project has: ssh.
+        let file_only = load(Some(&f)).unwrap().services.len();
+        let merged = super::merge_discovery(load(Some(&f)).unwrap().services, true).len();
+        assert_eq!(file_only, 1, "one service is written down");
+        assert!(
+            merged > file_only,
+            "the fixture is not exercising discovery: merge added nothing"
+        );
+        assert_eq!(
+            after, merged,
+            "a reload must keep what discovery merged: file {file_only}, merged {merged}, reload {after}"
+        );
+    }
 
     #[test]
     fn a_top_level_serve_false_means_tail() {

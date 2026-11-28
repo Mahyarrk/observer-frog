@@ -198,32 +198,15 @@ fn post_raw(opts: &TailOptions, body: &Value) -> Result<Value, (Option<u16>, Str
 
 /// Run the tail loop until stopped.
 pub fn run(mut cfg: Config, opts: TailOptions, halt: Arc<AtomicBool>) -> i32 {
-    // Ask the machine what it is running rather than trusting a hand-written list. Discovery
-    // only ever adds services the catalog can verify, so a stale entry cannot appear here.
-    //
-    // Merged, not replaced, and without the old `services.is_empty()` gate: a config that names
-    // even one service — a heartbeat file, a private script — used to switch discovery off, so the
-    // one-shot reporter sent a two-service payload while the served path sent fourteen. Explicit
-    // entries win on id, so a hand-picked port is never overwritten by the catalog default.
-    if cfg.discover {
-        match crate::catalog::load(None) {
-            Ok(entries) => {
-                let found = crate::discover::discover(&entries, "127.0.0.1");
-                let mut added = 0;
-                for svc in found {
-                    if cfg.services.iter().any(|s| s.id == svc.id) {
-                        continue;
-                    }
-                    println!("    discovered {:<16} {}", svc.id, svc.target);
-                    cfg.services.push(svc);
-                    added += 1;
-                }
-                if added == 0 {
-                    println!("  discovered nothing new; every catalog service is already configured");
-                }
-            }
-            Err(e) => eprintln!("  cannot load the catalog, no discovery: {e}"),
+    // Same merge the served path uses — see `config::merge_discovery` for why it is shared.
+    let before = cfg.services.len();
+    cfg.services = crate::config::merge_discovery(cfg.services, cfg.discover);
+    let added = cfg.services.len().saturating_sub(before);
+    if added > 0 {
+        for s in &cfg.services[before..] {
+            println!("    discovered {:<16} {}", s.id, s.target);
         }
+        println!("  discovered {added} service(s) on this machine");
     }
 
     println!("observer-frog tail");
