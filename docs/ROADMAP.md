@@ -19,8 +19,9 @@ dependency, a moving part, or an attack surface needs a reason stronger than "it
 | 0.4 | Role switching as a live setting, pairing with operator approval, one stable unit name, service discovery and add-from-panel |
 | 0.5 | Operator sign-in, listener identity, TLS upload from Settings, scheme discovery for pairing |
 | 0.6 | Notification routes in Settings (ntfy and webhook), a dead man's switch, bounded poll interval |
+| 0.6.1 | Ubuntu 26.04 support, discovery merged with explicit services on every path, retention actually running |
 
-0.6.0 is the current release. 140 tests, one source tree, macOS and Linux.
+0.6.1 is the current release. 142 tests, one source tree, macOS and two Linux distributions.
 
 ---
 
@@ -96,6 +97,44 @@ Web push (VAPID, subscriptions, a service worker handler). Telegram and SimpleX.
 per-severity routing. Digest and quiet hours. A watchdog for a single-machine install.
 
 The plan, kept for the reasoning rather than as a task list: [PLAN-0.6.0.md](PLAN-0.6.0.md).
+
+---
+
+## 0.6.1: a third machine (shipped)
+
+**Why it was next:** the software ran on two machines I controlled and had never met one I did not.
+A headless Ubuntu server is the honest test of that.
+
+### What landed
+
+- **Ubuntu 26.04 support.** Same static binary, built on Debian and copied outward, because a binary
+  built on the newer glibc would not run on the older one. Fifteen services monitored on a machine
+  with no display server and no toolchain.
+- **Discovery merged with explicit services, on every path that reads a config.** This was the
+  release's real work. Discovery had been gated on `services.is_empty()`, which meant a config
+  naming even one service switched it off; and the three places that read a config — boot, the
+  one-shot reporter, and the config watcher — each had their own copy of the logic, so they
+  disagreed. On the Ubuntu box that read as twelve services present at boot and absent one wave
+  later, with the head marking each one "no longer reporting". One function now, called from all
+  three.
+- **Retention that runs.** `db::prune` and its 24-hour and 30-day constants had existed since the
+  schema was written and were called only by a test. The table had reached 93k rows and 56 hours of
+  history against a documented 24. It now prunes hourly on whichever node owns the database, and the
+  first tick reclaimed 39,866 rows.
+- **Notifications proven end to end.** The sink pointed at a port nothing listened on, so no alert
+  had ever been delivered. Fixed, then verified by stopping a real service and watching the down and
+  recovery messages arrive on a phone.
+- **The catalog carries what it actually knows.** Sunshine's entry now says that a headless Linux
+  box binds its web UI while being unable to capture a desktop, so `up` is not proof of a working
+  stream host. WireGuard's says it is two implementations, not one program on two platforms.
+
+### What it did not do
+
+Windows still has no machine, so it has no proof. `9router` and `osiris` were left off the Ubuntu box
+by decision — one is a 820 MB Next.js app on a 3.5 GB Atom, the other publishes no release assets.
+The `docker` entry still names the macOS process, so it reads down on a Linux host that runs Docker.
+
+The plan: [PLAN-0.6.1.md](PLAN-0.6.1.md).
 
 ---
 

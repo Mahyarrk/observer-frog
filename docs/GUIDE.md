@@ -5,6 +5,11 @@ README is enough.
 
 ## Two machines
 
+Two is the common case, not the limit. Any number of tails can report to one head, and each keeps its
+own dashboard on its own machine — so the ports below never collide, because they are different
+machines. Three copies on three hosts each listening on 8770 are three separate sockets, not a
+conflict.
+
 Every copy always does both jobs: it probes this machine and keeps a dashboard, whether or not
 anyone else is looking at it. Two settings decide what leaves the machine.
 
@@ -154,6 +159,54 @@ loginctl enable-linger $USER
 
 The installer says so rather than pretending the unit is enough on its own.
 
+### Ubuntu
+
+Tested on Ubuntu 26.04 LTS, headless, x86-64. Nothing here needs root except the package installs.
+
+Build where the older glibc is. A binary built on Ubuntu 26.04 (glibc 2.43) will not start on
+Debian 13 (2.41), while one built on Debian runs on both. Build on the older machine, copy outward.
+
+```bash
+# on the build machine
+cargo build --release
+scp rust/target/release/observer-frog server:~/.local/state/observer-frog/observer-frog
+
+# on the server, as your normal user
+observer-frog install          # user unit under ~/.config/systemd/user
+loginctl enable-linger $USER   # so it starts at boot without a login
+```
+
+A fresh box needs no service list. With `discover = true` the first start asks the machine what it
+is running, verifies each catalog entry by its signature, and merges the result with whatever the
+config names by hand. Onboarding is then: install the software, restart the observer, confirm the
+card.
+
+**Config keys go above the first table header.** TOML joins every bare key after a `[table]` line to
+that table, so this puts `discover` and `report_to` inside `[node]` where nothing reads them:
+
+```toml
+[node]
+id = "server"
+
+report_to = "..."      # wrong: this is node.report_to
+discover = true        # wrong: this is node.discover
+```
+
+Put them first and the resolved config will say `role = head + tail` rather than `head`. When a tail
+reports nothing, `observer-frog config` is the first thing to read.
+
+**Ports.** Some software will not use the port the catalog expects, and the honest fix is to choose a
+different port for that service rather than to edit the catalog. Two that bit on a real box:
+
+- **v2rayA** listens on `2017` for its web UI and only takes `20170`/`20171` once a proxy node is
+  connected. On a machine already running Xray on those ports, install v2rayA and never connect a
+  node there — the UI alone is enough to be discovered and monitored.
+- **SimpleX XFTP** defaults to `443`, which a web server probably owns. Set `port = 5224` in
+  `/etc/opt/simplex-xftp/file-server.ini`.
+
+**Old Python is sometimes required.** SearXNG does not build against Python 3.14, which Ubuntu 26.04
+ships. `uv venv --python 3.12` gives it what it wants without touching the system interpreter.
+
 ## Things it deliberately does not do
 
 No Docker. A container cannot see host processes, its own cgroup is not the host's memory, and
@@ -254,6 +307,17 @@ worst case is five missed pings.
 head. If your head is the only machine and ntfy runs on the same box, nothing will tell you the
 process died. That is stated on the tab rather than left to be discovered.
 
+## How long the record lasts
+
+Per-check rows are kept for **24 hours** and hourly counters for **30 days**. The head prunes
+expired rows once an hour, on whichever node owns the database — a tail does not prune, because it
+does not hold other machines' history.
+
+That ceiling matters more than it sounds: a three-machine install writes roughly 120,000 check rows
+a day, and without the prune the file grows without limit on hardware that may be an SD card. A node
+removed from the roster keeps its 24 hours of raw rows until they expire on their own; there is
+nothing to clean up by hand.
+
 ## Honest limits
 
 Maintained around other work, so issues may sit for a while. GPU utilisation is not available on
@@ -299,7 +363,7 @@ makes it real.
 ## Tests
 
 ```bash
-cd rust && cargo test        # 140 tests
+cd rust && cargo test        # 142 tests
 ```
 
 Every behavioural rule in `docs/DESIGN.md` has a test named after it. One test does not check

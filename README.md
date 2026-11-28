@@ -1,12 +1,13 @@
 # observer-frog
 
-I run a handful of services across two machines: a Mac that does the work and a small Debian box
-that holds the pieces I do not want to babysit. Checking on them meant SSH, then `systemctl status`,
-then remembering which port belongs to what. I wanted one page I could look at from my phone, so I
-wrote this.
+I run a handful of services across three machines: a Mac that does the work, a small Debian box that
+holds the pieces I do not want to babysit, and an Ubuntu server. Checking on them meant SSH, then
+`systemctl status`, then remembering which port belongs to what. I wanted one page I could look at
+from my phone, so I wrote this.
 
 It watches the services you list, records when they go down and come back, keeps 30 days of uptime,
-and serves a PWA you can install on your home screen. One static binary, no runtime, ~8 MB resident.
+and serves a PWA you can install on your home screen. One static binary, no runtime, ~5-8 MB
+resident on Linux.
 
 ## Quick start
 
