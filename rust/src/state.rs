@@ -718,7 +718,6 @@ mod tests {
         assert_eq!(rows[0].checks, 2, "two samples in one hour must aggregate to 2");
     }
 
-    #[test]
     /// `degraded` must not be sticky. Both states mean "answering", so the change does not alert —
     /// but the stored state has to follow the report, or the card shows a word that stopped being
     /// true hours ago.
