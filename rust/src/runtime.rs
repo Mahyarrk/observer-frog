@@ -332,6 +332,10 @@ pub fn run(mut cfg: Config, config_path: Option<PathBuf>, tls: Option<(PathBuf, 
             // as a tail: it may have been a head before the last restart, and those rows are still
             // on disk waiting to clutter the node picker.
             let was_head = std::sync::atomic::AtomicBool::new(true);
+            // Retention runs on the same tick loop but only hourly; `0` guarantees the first tick
+            // after boot prunes, so a machine that has been off for a week does not wait an hour.
+            const PRUNE_INTERVAL_S: i64 = 3_600;
+            let mut last_prune: i64 = 0;
             while !halt.load(Ordering::SeqCst) {
                 // Acting as head is a setting, not an identity: read it every tick so the checkbox
                 // takes effect within five seconds, with no restart and no unit rewrite.
@@ -376,6 +380,26 @@ pub fn run(mut cfg: Config, config_path: Option<PathBuf>, tls: Option<(PathBuf, 
                     }
                     Err(e) => log_line(&format!("silence sweep failed: {e}")),
                 }
+
+                // Retention, once an hour, on the machine that owns the database.
+                //
+                // `db::prune` and its two retention constants have existed since the schema was
+                // written, and nothing ever called them: only a unit test did. The table therefore
+                // grew by roughly a hundred thousand rows a day with no ceiling — measured at 93k
+                // rows and 56 hours of history against a documented 24-hour retention, on a box with
+                // eMMC storage. Hourly rather than per-tick because deleting expired rows is cheap
+                // but not free, and the tide comes in slowly.
+                if now - last_prune >= PRUNE_INTERVAL_S {
+                    last_prune = now;
+                    match crate::db::prune(&app.cfg.db_path, Some(now)) {
+                        Ok((checks, rollups)) if checks + rollups > 0 => log_line(&format!(
+                            "retention: dropped {checks} expired check(s), {rollups} rollup(s)"
+                        )),
+                        Ok(_) => {}
+                        Err(e) => log_line(&format!("retention prune failed: {e}")),
+                    }
+                }
+
                 let mut left = tick;
                 while left > 0.0 && !halt.load(Ordering::SeqCst) {
                     let slice = left.min(0.25);

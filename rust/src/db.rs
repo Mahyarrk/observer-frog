@@ -708,4 +708,38 @@ mod tests {
         let left: i64 = conn.query_row("SELECT COUNT(*) FROM service_checks", [], |r| r.get(0)).unwrap();
         assert_eq!(left, 1);
     }
+
+    /// The case that cost real disk: rows from a machine that will never report again.
+    ///
+    /// A node removed from the roster leaves its checks behind, and nothing expired them because
+    /// `prune` was never called by the runtime. On the live head that reached 78,892 rows — 85% of
+    /// the table — for a node that had been gone for days. Retention has to reclaim those without
+    /// help, which is what this asserts.
+    #[test]
+    fn prune_reclaims_a_departed_nodes_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("status.db");
+        init(&db).unwrap();
+        let t = 1_800_000_000i64;
+        // A node that reported long ago, and a live one that reported just now.
+        for (node, ts) in [("gone", t - RAW_RETENTION_S - 3_600), ("live", t)] {
+            let conn = connect(&db).unwrap();
+            conn.execute(
+                "INSERT INTO service_checks (node_id, service_id, timestamp, status, detail, latency_ms, observed_at) \
+                 VALUES (?1,'a',?2,'up','',0,?2)",
+                (node, ts),
+            )
+            .unwrap();
+        }
+        let (checks, _) = prune(&db, Some(t)).unwrap();
+        assert_eq!(checks, 1, "exactly the departed node's row should expire");
+        let conn = connect(&db).unwrap();
+        let gone: i64 = conn
+            .query_row("SELECT COUNT(*) FROM service_checks WHERE node_id='gone'", [], |r| r.get(0))
+            .unwrap();
+        let live: i64 = conn
+            .query_row("SELECT COUNT(*) FROM service_checks WHERE node_id='live'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!((gone, live), (0, 1), "a departed node is reclaimed, a live one is kept");
+    }
 }
