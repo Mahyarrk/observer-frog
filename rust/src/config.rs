@@ -512,7 +512,11 @@ pub struct Watcher {
 
 impl Watcher {
     pub fn new(path: Option<&Path>) -> Result<Self, ConfigError> {
-        let config = load(path)?;
+        let mut config = load(path)?;
+        // Merge here as well as on reload. The watcher's first config is what the runtime uses until
+        // the file changes — which may be never — so a merge that happened only on reload meant
+        // discovery was discarded for the whole life of the process.
+        config.services = merge_discovery(config.services.clone(), config.discover);
         let file = config.path.clone();
         let mtime = file.as_ref().and_then(|p| fs::metadata(p).ok()).and_then(|m| m.modified().ok());
         Ok(Self { config, path: file, mtime, error: None })
