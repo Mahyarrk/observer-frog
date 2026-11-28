@@ -138,39 +138,50 @@ The plan: [PLAN-0.6.1.md](PLAN-0.6.1.md).
 
 ---
 
+## The route to 0.6.5
+
+The detailed plan now lives in [PLAN-0.6.2-0.6.5.md](PLAN-0.6.2-0.6.5.md). The version map:
+
+| Version | Theme |
+|---|---|
+| 0.6.2 | Telegram, through a BotFather bot |
+| 0.6.3 | SimpleX, opening with a timeboxed spike because it is not an HTTP POST |
+| 0.6.4 | Thirty days of uptime, drawn from `hourly_rollup` |
+| 0.6.5 | Windows, gated on a machine actually existing |
+| 0.7.0 | Web push, gated on where the VAPID key lives |
+
+That document opens with fourteen rules that every channel must satisfy — the contract ntfy already
+meets. The point of the next two versions is that they arrive without teaching the codebase a second
+way to notify.
+
+A fourth machine is not scheduled: three tails share one head today and nothing in the code counts
+machines.
+
+---
+
 ## 0.7.0: more routes, and the record
 
 ### Scope
 
-- **Telegram sink**, through the existing per-sink `use_proxy`. The field has been in the config
-  since 0.2 and has had no sink that needs it.
-- **SimpleX sink**, for the same reason: it is the one the operator already runs.
-- **Both arrive on the shape 0.6.0 established**: a `[[sink]]` block, a card in the same template, an
-  `enabled` tick and a test button. A route that needs a different settings shape needs an argument
-  first.
 - **Web push**: VAPID key pair, a subscription table per device, a `push` handler in the service
   worker, and an enable button. It is the only route that reaches a phone without a third-party
   relay or a server the operator runs — and, unlike ntfy, it cannot be lost to a wrong port number
   going unnoticed for a week.
-- **Metrics graphs.** The data is already there: `hourly_rollup` keeps 30 days of up/down/degraded
-  counts and latency sums. This is frontend work over an existing table, not new collection.
-- **Windows.** The first honest attempt at autostart (Task Scheduler). Until this lands, `install`
-  refuses on Windows and the dashboard works without a service.
-- **A fourth machine.** Three nodes now report to one head, so roster ordering and multiple approved
-  pairings have been exercised for real. Four adds what three cannot: a second machine running the
-  same software, which is where a wrong node id stops being invisible, and where one card per
-  machine either scales or does not.
+
+Telegram, SimpleX, the metrics graphs and Windows moved to 0.6.2 through 0.6.5; see the plan linked
+above. What remains here is the one route that needs a generated secret before it needs code.
 
 ### Done when
 
-- Each route can be enabled and disabled alone, and a failure in one does not suppress another. This
-  is already true of the two that shipped; the new ones inherit it rather than re-earning it.
-- Graphs render 30 days of uptime and latency without a new query pattern.
-- Windows: the binary installs, starts at login, and survives a reboot.
-- Ubuntu: the binary installs as a user unit, starts at boot without a login, and survives a reboot.
-  (Three machines reporting to one head is already proven; what is untested is the reboot.)
-- A fourth machine: all report, all appear, pairing approves each, and removing one leaves the others
-  untouched.
+- A push subscription survives a dashboard reload and receives a real alert with the browser closed.
+- A revoked or expired subscription is removed rather than retried for ever.
+- The VAPID key pair lives somewhere an operator can back up and restore, and a restore keeps
+  existing subscriptions working.
+
+The other criteria that used to live here now belong to the versions that own them: the route rules
+to 0.6.2 and 0.6.3, the graphs to 0.6.4, Windows and the Ubuntu reboot to 0.6.5. Ubuntu's reboot
+test was the last open item from 0.6.1 and has since been proven: the observer started 29 seconds
+after boot with no login sessions.
 
 ---
 
